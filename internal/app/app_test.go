@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,18 +24,34 @@ import (
 // Queries for anything not in zone get NXDOMAIN; queries for a refused type get REFUSED.
 // With silent=true it never answers.
 func fakeDNS(t *testing.T, zone string, silent bool, refuse ...uint16) string {
+	addr, _ := mutableDNS(t, zone, silent, refuse...)
+	return addr
+}
+
+// noAnswer, passed to mutableDNS's setter, makes the server stop answering.
+const noAnswer = "<no answer>"
+
+// mutableDNS is fakeDNS plus a function that replaces the zone it serves.
+func mutableDNS(t *testing.T, zone string, silent bool, refuse ...uint16) (string, func(zone string)) {
 	t.Helper()
-	var rrs []dns.RR
-	for _, line := range strings.Split(strings.TrimSpace(zone), "\n") {
-		if line = strings.TrimSpace(line); line == "" {
-			continue
+	parse := func(zone string) []dns.RR {
+		var rrs []dns.RR
+		for _, line := range strings.Split(strings.TrimSpace(zone), "\n") {
+			if line = strings.TrimSpace(line); line == "" {
+				continue
+			}
+			rr, err := dns.NewRR(line)
+			if err != nil {
+				t.Fatalf("bad zone line %q: %v", line, err)
+			}
+			rrs = append(rrs, rr)
 		}
-		rr, err := dns.NewRR(line)
-		if err != nil {
-			t.Fatalf("bad zone line %q: %v", line, err)
-		}
-		rrs = append(rrs, rr)
+		return rrs
 	}
+	var current atomic.Pointer[[]dns.RR]
+	var mute atomic.Bool
+	initial := parse(zone)
+	current.Store(&initial)
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +62,7 @@ func fakeDNS(t *testing.T, zone string, silent bool, refuse ...uint16) string {
 		t.Fatal(err)
 	}
 	h := dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
-		if silent {
+		if silent || mute.Load() {
 			return
 		}
 		m := new(dns.Msg)
@@ -57,7 +74,7 @@ func fakeDNS(t *testing.T, zone string, silent bool, refuse ...uint16) string {
 			return
 		}
 		known := false
-		for _, rr := range rrs {
+		for _, rr := range *current.Load() {
 			if strings.EqualFold(rr.Header().Name, q.Name) {
 				known = true
 				if rr.Header().Rrtype == q.Qtype {
@@ -82,7 +99,14 @@ func fakeDNS(t *testing.T, zone string, silent bool, refuse ...uint16) string {
 	go udp.ActivateAndServe()
 	go tcp.ActivateAndServe()
 	t.Cleanup(func() { udp.Shutdown(); tcp.Shutdown() })
-	return pc.LocalAddr().String()
+	return pc.LocalAddr().String(), func(zone string) {
+		mute.Store(zone == noAnswer)
+		if zone == noAnswer {
+			return
+		}
+		rrs := parse(zone)
+		current.Store(&rrs)
+	}
 }
 
 type harness struct {

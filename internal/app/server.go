@@ -92,6 +92,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/cases/{id}", s.getCase)
 	mux.HandleFunc("PATCH /api/cases/{id}", s.editCase)
 	mux.HandleFunc("POST /api/cases/{id}/targets", s.addTarget)
+	mux.HandleFunc("POST /api/cases/{id}/steps", s.runCheck)
 	mux.HandleFunc("GET /api/active", s.getActive)
 	mux.HandleFunc("PUT /api/active", s.setActive)
 	mux.HandleFunc("GET /api/events", s.events.serve)
@@ -143,6 +144,36 @@ func (s *Server) addTarget(w http.ResponseWriter, r *http.Request) {
 		err = s.runAuto(id, value, kind)
 	}
 	s.respondCase(w, http.StatusOK, id, err)
+}
+
+// runCheck runs a Check on one of the Case's Targets: the first run, or a
+// re-run that adds a new Step beside the earlier ones.
+func (s *Server) runCheck(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.caseID(w, r)
+	var body struct{ Check, Target string }
+	if !ok || !decode(w, r, &body) {
+		return
+	}
+	i := slices.IndexFunc(checks, func(c check) bool { return c.key == body.Check })
+	if i == -1 {
+		httpError(w, http.StatusBadRequest, "no such check: "+body.Check)
+		return
+	}
+	targets, err := s.store.targets(id)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	t := slices.IndexFunc(targets, func(t Target) bool { return t.Value == body.Target })
+	if t == -1 {
+		httpError(w, http.StatusBadRequest, body.Target+" is not a Target of this Case")
+		return
+	}
+	if !slices.Contains(targets[t].Checks, body.Check) {
+		httpError(w, http.StatusBadRequest, body.Check+" does not apply to "+targets[t].Kind+" Targets")
+		return
+	}
+	s.respondCase(w, http.StatusOK, id, s.runStep(id, checks[i], body.Target))
 }
 
 func (s *Server) editCase(w http.ResponseWriter, r *http.Request) {
@@ -281,6 +312,11 @@ func (s *Server) runStep(caseID int64, c check, target string) error {
 		result, runErr := c.run(ctx, s.cfg.Net, target)
 		if err := s.store.finishStep(&st, result, runErr); err != nil {
 			st.Status, st.Error = "failed", "could not save result: "+err.Error()
+		}
+		if st.Status == "ok" {
+			if prev, ok := s.store.previousOK(caseID, c.key, target, st.ID); ok {
+				st.ComparedTo, st.Changes = prev.ID, diffResults(prev.Result, st.Result)
+			}
 		}
 		s.events.publish(caseID, st)
 	})

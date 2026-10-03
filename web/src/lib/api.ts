@@ -5,6 +5,18 @@ export type Step = {
   status: 'running' | 'ok' | 'failed'
   error?: string
   result?: { rcode: string; records: Record<string, string[]>; errors?: Record<string, string> }
+  started_at: string
+  compared_to?: number // id of the earlier Step this one is compared against
+  changes?: Change[]
+}
+
+export type Change = { field: string; removed?: string[]; added?: string[] }
+
+/** records.MX → MX, errors.CAA → CAA error, rcode → Response code */
+export function fieldLabel(field: string): string {
+  if (field.startsWith('records.')) return field.slice('records.'.length)
+  if (field.startsWith('errors.')) return `${field.slice('errors.'.length)} error`
+  return field === 'rcode' ? 'Response code' : field
 }
 
 export type Target = { value: string; kind: 'domain' | 'hostname' | 'ip' | 'email'; checks: string[] }

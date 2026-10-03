@@ -53,6 +53,10 @@ type Step struct {
 	Error      string          `json:"error,omitempty"`
 	StartedAt  time.Time       `json:"started_at"`
 	FinishedAt *time.Time      `json:"finished_at,omitempty"`
+	// Set on a successful Step when an earlier successful Step of the same
+	// Check on the same Target exists: that Step's id, and what differs.
+	ComparedTo int64    `json:"compared_to,omitempty"`
+	Changes    []Change `json:"changes,omitempty"`
 }
 
 type Target struct {
@@ -312,7 +316,39 @@ func (s *store) getCase(id int64) (Case, error) {
 		}
 		c.Steps = append(c.Steps, st)
 	}
-	return c, rows.Err()
+	if err := rows.Err(); err != nil {
+		return c, err
+	}
+	compareSteps(c.Steps)
+	return c, nil
+}
+
+// compareSteps fills ComparedTo and Changes on each successful Step (in id
+// order) against the latest earlier successful Step of the same Check and Target.
+func compareSteps(steps []Step) {
+	last := map[[2]string]*Step{}
+	for i := range steps {
+		st := &steps[i]
+		if st.Status != "ok" {
+			continue
+		}
+		key := [2]string{st.Check, st.Target}
+		if prev := last[key]; prev != nil {
+			st.ComparedTo, st.Changes = prev.ID, diffResults(prev.Result, st.Result)
+		}
+		last[key] = st
+	}
+}
+
+// previousOK returns the latest successful Step of check on target in a Case
+// before the given Step id, or ok=false.
+func (s *store) previousOK(caseID int64, check, target string, before int64) (Step, bool) {
+	var st Step
+	var result string
+	err := s.db.QueryRow(`SELECT id, result FROM steps WHERE case_id = ? AND check_key = ? AND target = ? AND status = 'ok' AND id < ?
+		ORDER BY id DESC LIMIT 1`, caseID, check, target, before).Scan(&st.ID, &result)
+	st.Result = json.RawMessage(result)
+	return st, err == nil
 }
 
 // classifyTargets fills in the kind of Targets saved before kinds existed.

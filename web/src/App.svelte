@@ -4,10 +4,8 @@
   import Help from './lib/Help.svelte'
   import Kbd from './lib/Kbd.svelte'
   import Palette from './lib/Palette.svelte'
+  import StepCard from './lib/StepCard.svelte'
   import { handleKey, keymap, moveInList, navList, register, type Action } from './lib/keymap.svelte'
-
-  const checkLabels: Record<string, string> = { dns_lookup: 'DNS Lookup' }
-  const recordOrder = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA', 'CAA']
 
   let input = $state('')
   let targetEl: HTMLInputElement
@@ -18,8 +16,16 @@
   // ponytail: grows for the page's lifetime, bound it when Cases get long-lived tabs
   const seen = new Map<number, Step>()
 
+  // The server's copy wins once finished: comparisons can settle after the
+  // event (an older overlapping run finishing late). A cached event only
+  // fills in a Step the server still reports as running.
   function show(c: Case | null) {
-    current = c && { ...c, steps: (c.steps ?? []).map((s) => seen.get(s.id) ?? s) }
+    current = c && { ...c, steps: (c.steps ?? []).map((s) => (s.status === 'running' && seen.get(s.id)) || s) }
+  }
+
+  async function refresh(id: number) {
+    const fresh = await api<Case>('GET', `/api/cases/${id}`).catch(() => null)
+    if (fresh && current?.id === id) show(fresh) // the rep may have switched meanwhile
   }
 
   async function attempt(fn: () => Promise<void>) {
@@ -47,6 +53,29 @@
       show(await api<Case>('PATCH', `/api/cases/${current.id}`, fields))
     })
 
+  // Newest first; a Step is "earlier" once a newer Step of the same Check and Target exists.
+  const steps = $derived.by(() => {
+    const newest = new Set<string>()
+    return [...(current?.steps ?? [])].reverse().map((step) => {
+      const key = `${step.check} ${step.target}`
+      const earlier = newest.has(key)
+      newest.add(key)
+      return { step, earlier }
+    })
+  })
+
+  const rerun = (step: Step) =>
+    attempt(async () => {
+      if (!current) return
+      show(await api<Case>('POST', `/api/cases/${current.id}/steps`, { check: step.check, target: step.target }))
+    })
+
+  function rerunFocused() {
+    const id = Number((document.activeElement as HTMLElement | null)?.closest<HTMLElement>('[data-step-id]')?.dataset.stepId)
+    const step = current?.steps?.find((s) => s.id === id)
+    if (step && step.status !== 'running') rerun(step)
+  }
+
   async function submit(e: SubmitEvent) {
     e.preventDefault()
     if (!input.trim()) return
@@ -66,6 +95,7 @@
       { id: 'help', title: 'Show keyboard shortcuts', group: 'General', keys: ['?'], run: () => (keymap.helpOpen = true) },
       { id: 'new-case', title: 'New Case', group: 'Case', keys: ['n'], run: newCase },
       { id: 'focus-target', title: 'Add a Target', group: 'Case', keys: ['/'], run: () => targetEl.focus() },
+      { id: 'rerun', title: 'Re-run focused Step', group: 'Case', keys: ['r'], run: rerunFocused },
       { id: 'next', title: 'Next item', group: 'Navigation', keys: ['j'], run: () => moveInList(1) },
       { id: 'prev', title: 'Previous item', group: 'Navigation', keys: ['k'], run: () => moveInList(-1) },
     ),
@@ -104,12 +134,7 @@
     api<{ case: Case | null }>('GET', '/api/active').then((r) => show(r.case), () => {})
     const es = new EventSource('/api/events')
     // On (re)connect, events may have been missed: re-fetch the open Case.
-    es.onopen = async () => {
-      const id = current?.id
-      if (id === undefined) return
-      const fresh = await api<Case>('GET', `/api/cases/${id}`).catch(() => null)
-      if (fresh && current?.id === id) show(fresh) // the rep may have switched meanwhile
-    }
+    es.onopen = () => current && refresh(current.id)
     es.onmessage = (e) => {
       const { case_id, step } = JSON.parse(e.data) as { case_id: number; step: Step }
       seen.set(step.id, step)
@@ -117,6 +142,8 @@
       const i = current.steps.findIndex((s) => s.id === step.id)
       if (i === -1) current.steps.push(step)
       else current.steps[i] = step
+      // A finished run can change how other runs compare: re-read the Case.
+      if (step.status !== 'running') refresh(case_id)
     }
     return () => es.close()
   })
@@ -239,48 +266,8 @@
     {#if current}
       <section class="mt-6" aria-label="Steps">
         <div use:navList class="space-y-3">
-          {#each current.steps ?? [] as step (step.id)}
-            <article
-              data-nav-item
-              tabindex="-1"
-              aria-label="{checkLabels[step.check] ?? step.check} {step.target}"
-              class="overflow-hidden rounded-lg border border-line bg-surface transition-colors focus-visible:border-accent focus-visible:outline-none"
-            >
-              <header class="flex h-10 items-center justify-between border-b border-line px-3.5">
-                <span class="font-medium">
-                  {checkLabels[step.check] ?? step.check}
-                  <span class="ml-1 font-mono font-normal text-muted">{step.target}</span>
-                </span>
-                <span class="flex items-center gap-1.5 text-xs text-muted">
-                  <span
-                    class="size-1.5 rounded-full {step.status === 'ok' ? 'bg-ok' : step.status === 'failed' ? 'bg-crit' : 'animate-pulse bg-subtle'}"
-                  ></span>
-                  {step.status === 'running' ? 'Running' : step.status === 'ok' ? 'Done' : 'Failed'}
-                </span>
-              </header>
-              {#if step.status === 'failed'}
-                <p class="px-3.5 py-3 text-crit">{step.error}</p>
-              {:else if step.result}
-                {#if step.result.rcode !== 'NOERROR'}
-                  <p class="px-3.5 pt-3 text-warn">{step.result.rcode === 'NXDOMAIN' ? 'Domain does not exist (NXDOMAIN)' : step.result.rcode}</p>
-                {/if}
-                {#each Object.entries(step.result.errors ?? {}) as [type, msg]}
-                  <p class="px-3.5 pt-2 text-xs text-warn">{type} query failed: {msg}</p>
-                {/each}
-                <table class="my-1.5 w-full font-mono text-xs">
-                  <tbody>
-                    {#each recordOrder as type}
-                      {#each step.result.records[type] ?? [] as value, i}
-                        <tr class="align-top">
-                          <th scope="row" class="w-20 py-1 pl-3.5 text-left font-sans font-medium text-subtle">{i === 0 ? type : ''}</th>
-                          <td class="py-1 pr-3.5 break-all">{value}</td>
-                        </tr>
-                      {/each}
-                    {/each}
-                  </tbody>
-                </table>
-              {/if}
-            </article>
+          {#each steps as { step, earlier } (step.id)}
+            <StepCard {step} {earlier} onrerun={() => rerun(step)} />
           {:else}
             <p class="py-6 text-center text-subtle">No Checks apply to these Targets yet.</p>
           {/each}
