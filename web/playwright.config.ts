@@ -9,7 +9,7 @@ export default defineConfig({
   webServer: {
     command:
       'cd .. && go build -o build/e2e-stackwell ./cmd/stackwell && ' +
-      'XDG_DATA_HOME=$(mktemp -d) XDG_RUNTIME_DIR=$(mktemp -d) build/e2e-stackwell --no-browser -port 4790',
+      'XDG_DATA_HOME=$(mktemp -d) XDG_CONFIG_HOME=$(mktemp -d) XDG_RUNTIME_DIR=$(mktemp -d) build/e2e-stackwell --no-browser --no-keyring -port 4790',
     url: 'http://127.0.0.1:4790/api/health',
     reuseExistingServer: false,
   },

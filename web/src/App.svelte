@@ -6,6 +6,7 @@
   import Kbd from './lib/Kbd.svelte'
   import { checks } from './lib/checks.svelte'
   import Palette from './lib/Palette.svelte'
+  import Settings from './lib/Settings.svelte'
   import RunCard from './lib/RunCard.svelte'
   import StepCard from './lib/StepCard.svelte'
   import Suggestions from './lib/Suggestions.svelte'
@@ -159,6 +160,7 @@
   onMount(() =>
     register(
       { id: 'palette', title: 'Command palette', group: 'General', keys: ['mod+k', ':'], global: true, run: () => (keymap.paletteOpen = true) },
+      { id: 'settings', title: 'Settings', group: 'General', keys: [','], run: () => (keymap.settingsOpen = true) },
       { id: 'help', title: 'Show keyboard shortcuts', group: 'General', keys: ['?'], run: () => (keymap.helpOpen = true) },
       { id: 'new-case', title: 'New Case', group: 'Case', keys: ['n'], run: newCase },
       {
@@ -333,6 +335,17 @@
         Commands <Kbd key="mod+k" />
       </button>
       <button
+        onclick={() => (keymap.settingsOpen = true)}
+        aria-label="Settings"
+        class="flex size-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-raised hover:text-fg"
+      >
+        <svg viewBox="0 0 16 16" class="size-4" aria-hidden="true">
+          <path d="M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+          <circle cx="10" cy="4.5" r="1.5" stroke="currentColor" stroke-width="1.4" fill="none" />
+          <circle cx="6" cy="11.5" r="1.5" stroke="currentColor" stroke-width="1.4" fill="none" />
+        </svg>
+      </button>
+      <button
         onclick={() => (keymap.helpOpen = true)}
         aria-label="Keyboard shortcuts"
         class="flex size-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-raised hover:text-fg">?</button>
@@ -439,3 +452,4 @@
 
 <Palette />
 <Help />
+<Settings />

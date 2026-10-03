@@ -61,6 +61,7 @@ var migrations = []string{
 		finished_at TEXT
 	);
 	ALTER TABLE steps ADD COLUMN run_id INTEGER REFERENCES playbook_runs(id);`,
+	`CREATE TABLE secrets (name TEXT PRIMARY KEY, hint TEXT NOT NULL, backend TEXT NOT NULL);`,
 }
 
 // Step is one execution of a Check inside a Case. Once finished it never changes.
@@ -481,6 +482,35 @@ func readDismissed(q querier, caseID int64) ([]string, error) {
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+// secrets lists the secrets that exist, with their masked hints (never values).
+func (s *store) secrets() ([]secretView, error) {
+	rows, err := s.db.Query(`SELECT name, hint, backend FROM secrets ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []secretView{}
+	for rows.Next() {
+		var v secretView
+		if err := rows.Scan(&v.Name, &v.Hint, &v.Backend); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (s *store) setSecret(name, hint, backend string) error {
+	_, err := s.db.Exec(`INSERT INTO secrets (name, hint, backend) VALUES (?, ?, ?)
+		ON CONFLICT (name) DO UPDATE SET hint = excluded.hint, backend = excluded.backend`, name, hint, backend)
+	return err
+}
+
+func (s *store) deleteSecret(name string) error {
+	_, err := s.db.Exec(`DELETE FROM secrets WHERE name = ?`, name)
+	return err
 }
 
 func nullID(id int64) any {

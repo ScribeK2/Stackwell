@@ -28,6 +28,7 @@ func main() {
 	port := flag.Int("port", 0, "port on 127.0.0.1 (0 picks a free one)")
 	noBrowser := flag.Bool("no-browser", false, "print the URL instead of opening a browser")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	noKeyring := flag.Bool("no-keyring", false, "keep secrets in a file in the config folder, never the system keyring")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
@@ -49,7 +50,11 @@ func main() {
 	}
 	defer inst.Close()
 
-	dataDir, err := dataDir()
+	dataDir, err := xdgDir("XDG_DATA_HOME", ".local/share")
+	if err != nil {
+		log.Fatal(err)
+	}
+	configDir, err := xdgDir("XDG_CONFIG_HOME", ".config")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -57,7 +62,7 @@ func main() {
 	if _, err := fs.Stat(ui, "index.html"); err != nil {
 		ui = nil // built without `npm run build`; serve the placeholder
 	}
-	srv, err := app.New(app.Config{Version: version, DataDir: dataDir, Net: app.Net{Resolver: systemResolver()}, UI: ui})
+	srv, err := app.New(app.Config{Version: version, DataDir: dataDir, ConfigDir: configDir, TryKeyring: !*noKeyring, Net: app.Net{Resolver: systemResolver()}, UI: ui})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -92,14 +97,15 @@ func main() {
 	srv.Close()
 }
 
-func dataDir() (string, error) {
-	base := os.Getenv("XDG_DATA_HOME")
+// xdgDir returns $env/stackwell, or ~/fallback/stackwell, creating it 0700.
+func xdgDir(env, fallback string) (string, error) {
+	base := os.Getenv(env)
 	if base == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err
 		}
-		base = filepath.Join(home, ".local", "share")
+		base = filepath.Join(home, fallback)
 	}
 	dir := filepath.Join(base, "stackwell")
 	return dir, os.MkdirAll(dir, 0o700)

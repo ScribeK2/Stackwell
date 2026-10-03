@@ -46,6 +46,7 @@ func newEnv(t *testing.T, fakes ...string) *env {
 		"PATH=" + pathDir,
 		"XDG_RUNTIME_DIR=" + e.dir,
 		"XDG_DATA_HOME=" + e.dir,
+		"XDG_CONFIG_HOME=" + e.dir,
 		"DISPLAY=:99",
 	}
 	return e

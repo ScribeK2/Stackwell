@@ -24,6 +24,10 @@ type Config struct {
 	// PlaybookDir holds the team's Playbooks (*.yaml), which add to or
 	// override the built-in ones by name. Empty: built-ins only.
 	PlaybookDir string
+	// ConfigDir holds the secrets file when the keyring isn't used.
+	ConfigDir string
+	// TryKeyring stores secrets in the system keyring when one answers.
+	TryKeyring bool
 }
 
 type Server struct {
@@ -31,6 +35,7 @@ type Server struct {
 	store     *store
 	events    *broker
 	playbooks []Playbook
+	secrets   secretStore
 	ctx       context.Context
 	cancel    context.CancelFunc
 	steps     sync.WaitGroup // every running Step and Playbook run
@@ -42,6 +47,9 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	if cfg.CheckTimeout == 0 {
 		cfg.CheckTimeout = 15 * time.Second
+	}
+	if cfg.ConfigDir == "" {
+		cfg.ConfigDir = cfg.DataDir
 	}
 	playbooks, err := loadPlaybooks(cfg.PlaybookDir)
 	if err != nil {
@@ -59,6 +67,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{cfg: cfg, store: st, events: newBroker(), playbooks: playbooks, ctx: ctx, cancel: cancel,
+		secrets: openSecrets(cfg.ConfigDir, cfg.TryKeyring),
 		running: map[int64]context.CancelFunc{}}, nil
 }
 
@@ -79,6 +88,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/cases/{id}/targets", s.addTarget)
 	mux.HandleFunc("POST /api/cases/{id}/steps", s.runCheck)
 	mux.HandleFunc("POST /api/cases/{id}/suggestions/dismiss", s.dismissSuggestion)
+	mux.HandleFunc("GET /api/settings", s.getSettings)
+	mux.HandleFunc("PUT /api/settings/secrets/{name}", s.putSecret)
+	mux.HandleFunc("DELETE /api/settings/secrets/{name}", s.deleteSecret)
 	mux.HandleFunc("GET /api/playbooks", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, http.StatusOK, s.playbooks) })
 	mux.HandleFunc("POST /api/cases/{id}/runs", s.startRun)
 	mux.HandleFunc("POST /api/cases/{id}/runs/{run}/cancel", s.cancelRun)
