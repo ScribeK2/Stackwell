@@ -53,14 +53,24 @@ func mutableDNS(t *testing.T, zone string, silent bool, refuse ...uint16) (strin
 	var mute atomic.Bool
 	initial := parse(zone)
 	current.Store(&initial)
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	// UDP and TCP on the same port, like a real resolver (TCP serves
+	// truncated-answer retries). Another test may already hold that TCP port,
+	// so pick a fresh pair until both are free.
+	var pc net.PacketConn
+	var ln net.Listener
+	for range 50 {
+		var err error
+		if pc, err = net.ListenPacket("udp", "127.0.0.1:0"); err != nil {
+			t.Fatal(err)
+		}
+		if ln, err = net.Listen("tcp", pc.LocalAddr().String()); err == nil {
+			break
+		}
+		pc.Close()
+		pc = nil
 	}
-	// Serve TCP on the same port, like a real resolver, for truncated-answer retries.
-	ln, err := net.Listen("tcp", pc.LocalAddr().String())
-	if err != nil {
-		t.Fatal(err)
+	if pc == nil {
+		t.Fatal("no free UDP+TCP port pair for the fake DNS server")
 	}
 	h := dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
 		if silent || mute.Load() {

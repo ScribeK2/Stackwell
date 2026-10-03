@@ -25,7 +25,7 @@ func init() {
 		label: "SSL Inspection",
 		kinds: []string{kindDomain, kindHostname},
 		options: []Option{{Key: "port", Label: "Port",
-			Choices: []string{"443", "465", "587", "993", "995", "8443"}, Default: "443"}},
+			Choices: []string{"443", "465", "587", "993", "995", "8443"}, Default: "443", Subject: true}},
 		run:      sslInspection,
 		findings: sslFindings,
 	})

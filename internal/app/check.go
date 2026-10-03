@@ -65,13 +65,17 @@ func (n Net) HTTPClient() *http.Client {
 }
 
 // Option is a setting a Check accepts, e.g. a sweep depth or a lookup scope.
-// A Step's options are part of its identity: Steps are only compared with,
-// and superseded by, Steps of the same Check, Target and options.
+// A Step's options are part of its identity: Steps are only compared with
+// Steps of the same Check, Target and options.
 type Option struct {
 	Key     string   `json:"key"`
 	Label   string   `json:"label"`
 	Choices []string `json:"choices,omitempty"` // a select; empty means free text
 	Default string   `json:"default"`
+	// Subject marks an option that picks a different thing to examine (SSL
+	// Inspection's port is another service), not how much of it to examine.
+	// Findings come from the latest run per Check, Target and subject options.
+	Subject bool `json:"subject,omitempty"`
 }
 
 type check struct {
@@ -162,4 +166,17 @@ func checkInfos() []checkInfo {
 		out = append(out, checkInfo{Key: c.key, Label: c.label, Kinds: c.kinds, Options: opts})
 	}
 	return out
+}
+
+// subjectKey is the canonical form of a Step's subject options (see Option.Subject).
+func subjectKey(st Step) string {
+	sub := map[string]string{}
+	if c := checkByKey(st.Check); c != nil {
+		for _, o := range c.options {
+			if o.Subject {
+				sub[o.Key] = st.Options[o.Key]
+			}
+		}
+	}
+	return optionsKey(sub)
 }
