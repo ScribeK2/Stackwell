@@ -3,33 +3,45 @@ package app
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
-const schema = `
-CREATE TABLE IF NOT EXISTS cases (
-	id         INTEGER PRIMARY KEY,
-	created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS targets (
-	case_id INTEGER NOT NULL REFERENCES cases(id),
-	value   TEXT NOT NULL,
-	UNIQUE (case_id, value)
-);
-CREATE TABLE IF NOT EXISTS steps (
-	id          INTEGER PRIMARY KEY,
-	case_id     INTEGER NOT NULL REFERENCES cases(id),
-	check_key   TEXT NOT NULL,
-	target      TEXT NOT NULL,
-	status      TEXT NOT NULL,
-	result      TEXT,
-	error       TEXT NOT NULL DEFAULT '',
-	started_at  TEXT NOT NULL,
-	finished_at TEXT
-);`
+// migrations run in order; PRAGMA user_version records how many have been applied.
+// Append only — never edit a migration that has shipped.
+var migrations = []string{
+	`CREATE TABLE IF NOT EXISTS cases (
+		id         INTEGER PRIMARY KEY,
+		created_at TEXT NOT NULL
+	);
+	CREATE TABLE IF NOT EXISTS targets (
+		case_id INTEGER NOT NULL REFERENCES cases(id),
+		value   TEXT NOT NULL,
+		UNIQUE (case_id, value)
+	);
+	CREATE TABLE IF NOT EXISTS steps (
+		id          INTEGER PRIMARY KEY,
+		case_id     INTEGER NOT NULL REFERENCES cases(id),
+		check_key   TEXT NOT NULL,
+		target      TEXT NOT NULL,
+		status      TEXT NOT NULL,
+		result      TEXT,
+		error       TEXT NOT NULL DEFAULT '',
+		started_at  TEXT NOT NULL,
+		finished_at TEXT
+	);`,
+	`ALTER TABLE cases ADD COLUMN title TEXT NOT NULL DEFAULT '';
+	ALTER TABLE cases ADD COLUMN ticket_ref TEXT NOT NULL DEFAULT '';
+	ALTER TABLE cases ADD COLUMN status TEXT NOT NULL DEFAULT 'open';
+	ALTER TABLE cases ADD COLUMN last_active_at TEXT NOT NULL DEFAULT '';
+	UPDATE cases SET last_active_at = created_at;
+	ALTER TABLE targets ADD COLUMN kind TEXT NOT NULL DEFAULT '';
+	CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+}
 
 // Step is one execution of a Check inside a Case. Once finished it never changes.
 type Step struct {
@@ -43,11 +55,21 @@ type Step struct {
 	FinishedAt *time.Time      `json:"finished_at,omitempty"`
 }
 
+type Target struct {
+	Value  string   `json:"value"`
+	Kind   string   `json:"kind"`
+	Checks []string `json:"checks"` // keys of the Checks that apply to this kind
+}
+
 type Case struct {
-	ID        int64     `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	Targets   []string  `json:"targets"`
-	Steps     []Step    `json:"steps"`
+	ID           int64     `json:"id"`
+	Title        string    `json:"title"`
+	TicketRef    string    `json:"ticket_ref"`
+	Status       string    `json:"status"` // open | resolved
+	CreatedAt    time.Time `json:"created_at"`
+	LastActiveAt time.Time `json:"last_active_at"`
+	Targets      []Target  `json:"targets"`
+	Steps        []Step    `json:"steps,omitempty"`
 }
 
 type store struct{ db *sql.DB }
@@ -57,28 +79,121 @@ func openStore(dir string) (*store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return &store{db}, nil
 }
 
-func (s *store) createCase(target string) (int64, error) {
+func migrate(db *sql.DB) error {
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	for i := version; i < len(migrations); i++ {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(migrations[i]); err != nil {
+			tx.Rollback()
+			return err
+		}
+		// PRAGMA can't take a bound parameter; i is ours, not input.
+		if _, err := tx.Exec(`PRAGMA user_version = ` + strconv.Itoa(i+1)); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// createCase creates a Case with one Target and makes it the active Case.
+func (s *store) createCase(value, kind string) (int64, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`INSERT INTO cases (created_at) VALUES (?)`, now())
+	t := now()
+	res, err := tx.Exec(`INSERT INTO cases (created_at, last_active_at) VALUES (?, ?)`, t, t)
 	if err != nil {
 		return 0, err
 	}
 	id, _ := res.LastInsertId()
-	if _, err := tx.Exec(`INSERT INTO targets (case_id, value) VALUES (?, ?)`, id, target); err != nil {
+	if _, err := tx.Exec(`INSERT INTO targets (case_id, value, kind) VALUES (?, ?, ?)`, id, value, kind); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`INSERT INTO settings (key, value) VALUES ('active_case', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, id); err != nil {
 		return 0, err
 	}
 	return id, tx.Commit()
+}
+
+// addTarget adds a Target to a Case; added is false if it was already there.
+func (s *store) addTarget(caseID int64, value, kind string) (added bool, err error) {
+	res, err := s.db.Exec(`INSERT INTO targets (case_id, value, kind) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, caseID, value, kind)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+func (s *store) caseExists(id int64) bool {
+	var one int
+	return s.db.QueryRow(`SELECT 1 FROM cases WHERE id = ?`, id).Scan(&one) == nil
+}
+
+type caseEdit struct {
+	Title     *string `json:"title"`
+	TicketRef *string `json:"ticket_ref"`
+	Status    *string `json:"status"`
+}
+
+func (s *store) editCase(id int64, e caseEdit) error {
+	_, err := s.db.Exec(`UPDATE cases SET
+		title = coalesce(?, title), ticket_ref = coalesce(?, ticket_ref), status = coalesce(?, status)
+		WHERE id = ?`, e.Title, e.TicketRef, e.Status, id)
+	return err
+}
+
+// setActive makes a Case the active one, or clears it with id 0.
+func (s *store) setActive(id int64) error {
+	if id == 0 {
+		_, err := s.db.Exec(`DELETE FROM settings WHERE key = 'active_case'`)
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE cases SET last_active_at = ? WHERE id = ?`, now(), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	if _, err := tx.Exec(`INSERT INTO settings (key, value) VALUES ('active_case', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// activeCase returns the active Case's id, or 0 if none.
+func (s *store) activeCase() (int64, error) {
+	var id int64
+	err := s.db.QueryRow(`SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'active_case'`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return id, err
 }
 
 func (s *store) startStep(caseID int64, check, target string) (Step, error) {
@@ -106,31 +221,80 @@ func (s *store) finishStep(st *Step, result any, runErr error) error {
 	return err
 }
 
-// getCase returns sql.ErrNoRows when the Case doesn't exist.
-func (s *store) getCase(id int64) (Case, error) {
-	c := Case{ID: id, Targets: []string{}, Steps: []Step{}}
-	var created string
-	if err := s.db.QueryRow(`SELECT created_at FROM cases WHERE id = ?`, id).Scan(&created); err != nil {
+const caseColumns = `id, title, ticket_ref, status, created_at, last_active_at`
+
+func scanCase(row interface{ Scan(...any) error }) (Case, error) {
+	var c Case
+	var created, active string
+	if err := row.Scan(&c.ID, &c.Title, &c.TicketRef, &c.Status, &created, &active); err != nil {
 		return c, err
 	}
 	c.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	c.LastActiveAt, _ = time.Parse(time.RFC3339Nano, active)
+	return c, nil
+}
 
-	rows, err := s.db.Query(`SELECT value FROM targets WHERE case_id = ? ORDER BY rowid`, id)
+func (s *store) targets(caseID int64) ([]Target, error) {
+	rows, err := s.db.Query(`SELECT value, kind FROM targets WHERE case_id = ? ORDER BY rowid`, caseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ts := []Target{}
+	for rows.Next() {
+		var t Target
+		if err := rows.Scan(&t.Value, &t.Kind); err != nil {
+			return nil, err
+		}
+		t.Checks = checksFor(t.Kind)
+		ts = append(ts, t)
+	}
+	return ts, rows.Err()
+}
+
+// recentCases lists Cases, most recently active first, without their Steps.
+func (s *store) recentCases(limit int) ([]Case, error) {
+	rows, err := s.db.Query(`SELECT `+caseColumns+` FROM cases ORDER BY last_active_at DESC, id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	var cs []Case
+	for rows.Next() {
+		c, err := scanCase(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		cs = append(cs, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range cs {
+		if cs[i].Targets, err = s.targets(cs[i].ID); err != nil {
+			return nil, err
+		}
+	}
+	return cs, nil
+}
+
+// getCase returns sql.ErrNoRows when the Case doesn't exist.
+func (s *store) getCase(id int64) (Case, error) {
+	c, err := scanCase(s.db.QueryRow(`SELECT `+caseColumns+` FROM cases WHERE id = ?`, id))
 	if err != nil {
 		return c, err
 	}
-	for rows.Next() {
-		var v string
-		rows.Scan(&v)
-		c.Targets = append(c.Targets, v)
+	if c.Targets, err = s.targets(id); err != nil {
+		return c, err
 	}
-	rows.Close()
 
-	rows, err = s.db.Query(`SELECT id, check_key, target, status, result, error, started_at, finished_at FROM steps WHERE case_id = ? ORDER BY id`, id)
+	rows, err := s.db.Query(`SELECT id, check_key, target, status, result, error, started_at, finished_at FROM steps WHERE case_id = ? ORDER BY id`, id)
 	if err != nil {
 		return c, err
 	}
 	defer rows.Close()
+	c.Steps = []Step{}
 	for rows.Next() {
 		var st Step
 		var result, finished sql.NullString
@@ -149,6 +313,33 @@ func (s *store) getCase(id int64) (Case, error) {
 		c.Steps = append(c.Steps, st)
 	}
 	return c, rows.Err()
+}
+
+// classifyTargets fills in the kind of Targets saved before kinds existed.
+func (s *store) classifyTargets() error {
+	rows, err := s.db.Query(`SELECT rowid, value FROM targets WHERE kind = ''`)
+	if err != nil {
+		return err
+	}
+	type row struct {
+		id    int64
+		value string
+	}
+	var todo []row
+	for rows.Next() {
+		var r row
+		rows.Scan(&r.id, &r.value)
+		todo = append(todo, r)
+	}
+	rows.Close()
+	for _, r := range todo {
+		if _, kind, err := parseTarget(r.value); err == nil {
+			if _, err := s.db.Exec(`UPDATE targets SET kind = ? WHERE rowid = ?`, kind, r.id); err != nil {
+				return err
+			}
+		}
+	}
+	return rows.Err()
 }
 
 // failRunning marks Steps left "running" by a previous process as failed;

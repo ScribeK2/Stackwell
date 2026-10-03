@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,11 +30,26 @@ type Config struct {
 }
 
 type check struct {
-	key string
-	run func(ctx context.Context, n Net, target string) (any, error)
+	key   string
+	kinds []string // Target kinds it applies to
+	auto  bool     // runs when a Target of a matching kind is added
+	run   func(ctx context.Context, n Net, target string) (any, error)
 }
 
-var dnsLookupCheck = check{key: "dns_lookup", run: dnsLookup}
+var checks = []check{
+	{key: "dns_lookup", kinds: []string{kindDomain, kindHostname}, auto: true, run: dnsLookup},
+}
+
+// checksFor lists the keys of the Checks that apply to a Target kind.
+func checksFor(kind string) []string {
+	keys := []string{}
+	for _, c := range checks {
+		if slices.Contains(c.kinds, kind) {
+			keys = append(keys, c.key)
+		}
+	}
+	return keys
+}
 
 type Server struct {
 	cfg    Config
@@ -55,6 +71,9 @@ func New(cfg Config) (*Server, error) {
 	if err := st.failRunning(); err != nil {
 		return nil, err
 	}
+	if err := st.classifyTargets(); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{cfg: cfg, store: st, events: newBroker(), ctx: ctx, cancel: cancel}, nil
 }
@@ -68,8 +87,13 @@ func (s *Server) Close() error {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/cases", s.listCases)
 	mux.HandleFunc("POST /api/cases", s.createCase)
 	mux.HandleFunc("GET /api/cases/{id}", s.getCase)
+	mux.HandleFunc("PATCH /api/cases/{id}", s.editCase)
+	mux.HandleFunc("POST /api/cases/{id}/targets", s.addTarget)
+	mux.HandleFunc("GET /api/active", s.getActive)
+	mux.HandleFunc("PUT /api/active", s.setActive)
 	mux.HandleFunc("GET /api/events", s.events.serve)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": s.cfg.Version})
@@ -85,50 +109,162 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
+// createCase starts a Case from the Target the rep typed and makes it active.
 func (s *Server) createCase(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Target string }
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpError(w, http.StatusBadRequest, "invalid JSON")
+	if !decode(w, r, &body) {
 		return
 	}
-	target := strings.TrimSpace(body.Target)
-	if target == "" {
-		httpError(w, http.StatusBadRequest, "target is required")
-		return
-	}
-	id, err := s.store.createCase(target)
+	value, kind, err := parseTarget(body.Target)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
+		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.runStep(id, dnsLookupCheck, target); err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
+	id, err := s.store.createCase(value, kind)
+	if err == nil {
+		err = s.runAuto(id, value, kind)
+	}
+	s.respondCase(w, http.StatusCreated, id, err)
+}
+
+func (s *Server) addTarget(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.caseID(w, r)
+	var body struct{ Target string }
+	if !ok || !decode(w, r, &body) {
 		return
 	}
-	c, err := s.store.getCase(id)
+	value, kind, err := parseTarget(body.Target)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
+		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, c)
+	added, err := s.store.addTarget(id, value, kind)
+	if err == nil && added {
+		err = s.runAuto(id, value, kind)
+	}
+	s.respondCase(w, http.StatusOK, id, err)
+}
+
+func (s *Server) editCase(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.caseID(w, r)
+	var e caseEdit
+	if !ok || !decode(w, r, &e) {
+		return
+	}
+	for _, f := range []*string{e.Title, e.TicketRef} {
+		if f != nil {
+			*f = strings.TrimSpace(*f)
+		}
+	}
+	if e.Status != nil && *e.Status != "open" && *e.Status != "resolved" {
+		httpError(w, http.StatusBadRequest, `status must be "open" or "resolved"`)
+		return
+	}
+	s.respondCase(w, http.StatusOK, id, s.store.editCase(id, e))
 }
 
 func (s *Server) getCase(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		httpError(w, http.StatusNotFound, "no such case")
-		return
+	if id, ok := s.caseID(w, r); ok {
+		s.respondCase(w, http.StatusOK, id, nil)
 	}
-	c, err := s.store.getCase(id)
-	if errors.Is(err, sql.ErrNoRows) {
-		httpError(w, http.StatusNotFound, "no such case")
-		return
-	}
+}
+
+func (s *Server) listCases(w http.ResponseWriter, r *http.Request) {
+	cs, err := s.store.recentCases(50)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, c)
+	if cs == nil {
+		cs = []Case{}
+	}
+	writeJSON(w, http.StatusOK, cs)
+}
+
+// getActive returns {"case": Case} or {"case": null} when no Case is active.
+func (s *Server) getActive(w http.ResponseWriter, r *http.Request) {
+	id, err := s.store.activeCase()
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if id == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"case": nil})
+		return
+	}
+	c, err := s.store.getCase(id)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"case": c})
+}
+
+// setActive switches Cases ({"case_id": n}) or clears the active Case
+// ({"case_id": null}) so the next Target typed starts a new one.
+func (s *Server) setActive(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CaseID *int64 `json:"case_id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	var id int64
+	if body.CaseID != nil {
+		id = *body.CaseID
+	}
+	if err := s.store.setActive(id); errors.Is(err, sql.ErrNoRows) {
+		httpError(w, http.StatusNotFound, "no such case")
+		return
+	} else if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.getActive(w, r)
+}
+
+// runAuto runs the automatic Checks that apply to a newly added Target.
+func (s *Server) runAuto(caseID int64, value, kind string) error {
+	for _, c := range checks {
+		if c.auto && slices.Contains(c.kinds, kind) {
+			if err := s.runStep(caseID, c, value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// caseID reads the {id} path value, answering 404 itself if no such Case exists.
+func (s *Server) caseID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || !s.store.caseExists(id) {
+		httpError(w, http.StatusNotFound, "no such case")
+		return 0, false
+	}
+	return id, true
+}
+
+// respondCase answers with the Case as it now stands, or with err.
+func (s *Server) respondCase(w http.ResponseWriter, code int, id int64, err error) {
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c, err := s.store.getCase(id)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, code, c)
+}
+
+func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid JSON")
+		return false
+	}
+	return true
 }
 
 // runStep records a running Step and executes the Check in the background,

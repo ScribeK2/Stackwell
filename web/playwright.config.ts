@@ -4,6 +4,7 @@ import { defineConfig } from '@playwright/test'
 // `npm run e2e` builds the UI first; the binary is built here.
 export default defineConfig({
   testDir: 'e2e',
+  workers: 1, // one shared server with one active Case: tests must not interleave
   use: { baseURL: 'http://127.0.0.1:4790' },
   webServer: {
     command:

@@ -1,19 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { api, ApiError, caseName, type Case, type Step } from './lib/api'
   import Help from './lib/Help.svelte'
   import Kbd from './lib/Kbd.svelte'
   import Palette from './lib/Palette.svelte'
-  import { handleKey, keymap, moveInList, navList, register } from './lib/keymap.svelte'
-
-  type Step = {
-    id: number
-    check: string
-    target: string
-    status: 'running' | 'ok' | 'failed'
-    error?: string
-    result?: { rcode: string; records: Record<string, string[]>; errors?: Record<string, string> }
-  }
-  type Case = { id: number; targets: string[]; steps: Step[] }
+  import { handleKey, keymap, moveInList, navList, register, type Action } from './lib/keymap.svelte'
 
   const checkLabels: Record<string, string> = { dns_lookup: 'DNS Lookup' }
   const recordOrder = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA', 'CAA']
@@ -21,33 +12,108 @@
   let input = $state('')
   let targetEl: HTMLInputElement
   let current = $state<Case | null>(null)
+  let recent = $state<Case[]>([])
   let error = $state('')
   // Latest event per Step id; a Step can finish before the POST that started it returns.
   // ponytail: grows for the page's lifetime, bound it when Cases get long-lived tabs
   const seen = new Map<number, Step>()
 
+  function show(c: Case | null) {
+    current = c && { ...c, steps: (c.steps ?? []).map((s) => seen.get(s.id) ?? s) }
+  }
+
+  async function attempt(fn: () => Promise<void>) {
+    error = ''
+    try {
+      await fn()
+    } catch (e) {
+      error = e instanceof ApiError ? e.message : String(e)
+    }
+  }
+
+  const newCase = () =>
+    attempt(async () => {
+      await api('PUT', '/api/active', { case_id: null })
+      show(null)
+      targetEl.focus()
+    })
+
+  const switchTo = (id: number) =>
+    attempt(async () => show((await api<{ case: Case }>('PUT', '/api/active', { case_id: id })).case))
+
+  const edit = (fields: Partial<Pick<Case, 'title' | 'ticket_ref' | 'status'>>) =>
+    attempt(async () => {
+      if (!current) return
+      show(await api<Case>('PATCH', `/api/cases/${current.id}`, fields))
+    })
+
+  async function submit(e: SubmitEvent) {
+    e.preventDefault()
+    if (!input.trim()) return
+    await attempt(async () => {
+      show(
+        current
+          ? await api<Case>('POST', `/api/cases/${current.id}/targets`, { target: input })
+          : await api<Case>('POST', '/api/cases', { target: input }),
+      )
+      input = ''
+    })
+  }
+
   onMount(() =>
     register(
       { id: 'palette', title: 'Command palette', group: 'General', keys: ['mod+k', ':'], global: true, run: () => (keymap.paletteOpen = true) },
       { id: 'help', title: 'Show keyboard shortcuts', group: 'General', keys: ['?'], run: () => (keymap.helpOpen = true) },
-      { id: 'focus-target', title: 'Focus target field', group: 'Case', keys: ['/'], run: () => targetEl.focus() },
+      { id: 'new-case', title: 'New Case', group: 'Case', keys: ['n'], run: newCase },
+      { id: 'focus-target', title: 'Add a Target', group: 'Case', keys: ['/'], run: () => targetEl.focus() },
       { id: 'next', title: 'Next item', group: 'Navigation', keys: ['j'], run: () => moveInList(1) },
       { id: 'prev', title: 'Previous item', group: 'Navigation', keys: ['k'], run: () => moveInList(-1) },
     ),
   )
 
+  // Resolve/Reopen for the open Case.
+  $effect(() => {
+    if (!current) return
+    const resolved = current.status === 'resolved'
+    return register({
+      id: 'toggle-status',
+      title: resolved ? 'Reopen Case' : 'Resolve Case',
+      group: 'Case',
+      run: () => edit({ status: resolved ? 'open' : 'resolved' }),
+    })
+  })
+
+  // Recent Cases appear in the palette, searchable by title, Target or ticket reference.
+  $effect(() => {
+    if (keymap.paletteOpen) api<Case[]>('GET', '/api/cases').then((cs) => (recent = cs), () => {})
+  })
+  $effect(() => {
+    const actions: Action[] = recent
+      .filter((c) => c.id !== current?.id)
+      .slice(0, 8)
+      .map((c) => ({
+        id: `case-${c.id}`,
+        title: `${caseName(c)}${c.ticket_ref ? ` ${c.ticket_ref}` : ''}`,
+        group: c.status === 'resolved' ? 'Resolved Case' : 'Switch Case',
+        run: () => switchTo(c.id),
+      }))
+    return register(...actions)
+  })
+
   onMount(() => {
+    api<{ case: Case | null }>('GET', '/api/active').then((r) => show(r.case), () => {})
     const es = new EventSource('/api/events')
     // On (re)connect, events may have been missed: re-fetch the open Case.
     es.onopen = async () => {
-      if (!current) return
-      const res = await fetch(`/api/cases/${current.id}`)
-      if (res.ok) current = await res.json()
+      const id = current?.id
+      if (id === undefined) return
+      const fresh = await api<Case>('GET', `/api/cases/${id}`).catch(() => null)
+      if (fresh && current?.id === id) show(fresh) // the rep may have switched meanwhile
     }
     es.onmessage = (e) => {
       const { case_id, step } = JSON.parse(e.data) as { case_id: number; step: Step }
       seen.set(step.id, step)
-      if (!current || current.id !== case_id) return
+      if (!current?.steps || current.id !== case_id) return
       const i = current.steps.findIndex((s) => s.id === step.id)
       if (i === -1) current.steps.push(step)
       else current.steps[i] = step
@@ -55,29 +121,19 @@
     return () => es.close()
   })
 
-  async function submit(e: SubmitEvent) {
-    e.preventDefault()
-    const target = input.trim()
-    if (!target) return
-    error = ''
-    let res: Response, body: any
-    try {
-      res = await fetch('/api/cases', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target }),
-      })
-      body = await res.json()
-    } catch {
-      error = 'Stackwell is not responding.'
-      return
+  // Inline fields save on Enter or blur; Escape reverts.
+  function inlineField(node: HTMLInputElement, field: 'title' | 'ticket_ref') {
+    const save = () => current && node.value.trim() !== current[field] && edit({ [field]: node.value })
+    const onkey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') node.blur()
+      if (e.key === 'Escape' && current) {
+        node.value = current[field]
+        node.blur()
+      }
     }
-    if (!res.ok) {
-      error = body.error
-      return
-    }
-    current = { ...body, steps: body.steps.map((s: Step) => seen.get(s.id) ?? s) }
-    input = ''
+    node.addEventListener('blur', save)
+    node.addEventListener('keydown', onkey)
+    return { destroy: () => (node.removeEventListener('blur', save), node.removeEventListener('keydown', onkey)) }
   }
 </script>
 
@@ -93,9 +149,15 @@
     </span>
     {#if current}
       <span class="text-subtle">/</span>
-      <span class="truncate text-muted">Case #{current.id}</span>
+      <span class="truncate text-muted">{caseName(current)}</span>
     {/if}
     <div class="ml-auto flex items-center gap-1">
+      <button
+        onclick={newCase}
+        class="flex h-7 items-center gap-2 rounded-md px-2 text-muted transition-colors hover:bg-raised hover:text-fg"
+      >
+        New Case <Kbd key="n" />
+      </button>
       <button
         onclick={() => (keymap.paletteOpen = true)}
         class="flex h-7 items-center gap-2 rounded-md border border-line px-2 text-muted transition-colors hover:border-line-strong hover:text-fg"
@@ -110,17 +172,62 @@
   </header>
 
   <main class="mx-auto w-full max-w-4xl flex-1 px-4 py-8 sm:px-6">
+    {#if current}
+      <section aria-label="Case details" class="mb-6">
+        <div class="flex items-center gap-3">
+          <input
+            aria-label="Case title"
+            value={current.title}
+            use:inlineField={'title'}
+            placeholder={current.targets[0]?.value ?? 'Untitled Case'}
+            class="min-w-0 flex-1 rounded-md bg-transparent px-1.5 py-1 -ml-1.5 text-lg font-semibold tracking-tight outline-none placeholder:text-fg hover:bg-raised focus:bg-raised focus-visible:outline-none"
+          />
+          <input
+            aria-label="Ticket reference"
+            value={current.ticket_ref}
+            use:inlineField={'ticket_ref'}
+            placeholder="Ticket ref"
+            class="w-32 rounded-md border border-line bg-transparent px-2 py-1 font-mono text-xs outline-none placeholder:font-sans placeholder:text-subtle hover:border-line-strong focus:border-accent focus-visible:outline-none"
+          />
+          <button
+            onclick={() => edit({ status: current?.status === 'resolved' ? 'open' : 'resolved' })}
+            class="flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors {current.status === 'resolved'
+              ? 'border-ok/40 text-ok hover:bg-ok/10'
+              : 'border-line text-muted hover:border-line-strong hover:text-fg'}"
+          >
+            {#if current.status === 'resolved'}
+              <svg viewBox="0 0 16 16" class="size-3.5" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              Resolved
+            {:else}
+              Resolve
+            {/if}
+          </button>
+        </div>
+        <ul class="mt-2 flex flex-wrap gap-1.5" aria-label="Targets">
+          {#each current.targets as t (t.value)}
+            <li class="flex h-6 items-center gap-1.5 rounded-md border border-line bg-surface px-2 font-mono text-xs">
+              {t.value}<span class="font-sans text-[10px] font-medium tracking-wide text-subtle uppercase">{t.kind}</span>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+
     <form onsubmit={submit} class="group relative">
       <label for="target" class="sr-only">Target</label>
       <svg viewBox="0 0 16 16" class="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-subtle" aria-hidden="true">
-        <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.5" fill="none" />
-        <path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+        {#if current}
+          <path d="M8 3.5v9M3.5 8h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+        {:else}
+          <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.5" fill="none" />
+          <path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+        {/if}
       </svg>
       <input
         id="target"
         bind:this={targetEl}
         bind:value={input}
-        placeholder="Enter a domain, host or IP"
+        placeholder={current ? 'Add a Target to this Case' : 'Enter a domain, host, IP or email to start a Case'}
         autocomplete="off"
         spellcheck="false"
         class="h-11 w-full rounded-lg border border-line bg-surface pr-12 pl-10 font-mono text-sm shadow-xs transition-colors outline-none placeholder:font-sans placeholder:text-subtle hover:border-line-strong focus:border-accent focus:ring-3 focus:ring-accent-soft focus-visible:outline-none"
@@ -130,13 +237,9 @@
     {#if error}<p role="alert" class="mt-2 text-crit">{error}</p>{/if}
 
     {#if current}
-      <section class="mt-8" aria-label="Steps">
-        <h1 class="mb-3 flex items-baseline gap-2">
-          <span class="font-medium">Case #{current.id}</span>
-          <span class="font-mono text-muted">{current.targets.join(', ')}</span>
-        </h1>
+      <section class="mt-6" aria-label="Steps">
         <div use:navList class="space-y-3">
-          {#each current.steps as step (step.id)}
+          {#each current.steps ?? [] as step (step.id)}
             <article
               data-nav-item
               tabindex="-1"
@@ -178,12 +281,14 @@
                 </table>
               {/if}
             </article>
+          {:else}
+            <p class="py-6 text-center text-subtle">No Checks apply to these Targets yet.</p>
           {/each}
         </div>
       </section>
     {:else}
       <p class="mt-16 text-center text-subtle">
-        Type a target and press <Kbd key="Enter" /> to start a Case. <Kbd key="?" /> for shortcuts.
+        Type a Target and press <Kbd key="Enter" /> to start a Case. <Kbd key="?" /> for shortcuts.
       </p>
     {/if}
   </main>

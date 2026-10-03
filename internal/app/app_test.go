@@ -145,9 +145,9 @@ type step struct {
 }
 
 type caseView struct {
-	ID      int64    `json:"id"`
-	Targets []string `json:"targets"`
-	Steps   []step   `json:"steps"`
+	ID      int64        `json:"id"`
+	Targets []targetView `json:"targets"`
+	Steps   []step       `json:"steps"`
 }
 
 // waitStep polls the Case until its first Step leaves "running".
@@ -186,7 +186,7 @@ func TestTypingATargetStartsACaseAndRunsDNSLookup(t *testing.T) {
 	if code := h.do("POST", "/api/cases", map[string]string{"target": "example.com"}, &c); code != http.StatusCreated {
 		t.Fatalf("status %d", code)
 	}
-	if len(c.Targets) != 1 || c.Targets[0] != "example.com" {
+	if len(c.Targets) != 1 || c.Targets[0].Value != "example.com" {
 		t.Fatalf("targets = %v", c.Targets)
 	}
 
