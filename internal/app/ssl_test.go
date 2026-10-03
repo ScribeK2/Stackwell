@@ -161,13 +161,6 @@ func runSSL(t *testing.T, addr, port string, roots *x509.CertPool) (sslResult, [
 	return res, mine
 }
 
-func findingWith(fs []finding, code string) *finding {
-	if i := slices.IndexFunc(fs, func(f finding) bool { return f.Code == code }); i != -1 {
-		return &fs[i]
-	}
-	return nil
-}
-
 func TestSSLInspectionShowsAValidChain(t *testing.T) {
 	p := newPKI(t)
 	leaf := mint(t, "example.com", []string{"example.com", "www.example.com"}, days(90), p.inter)

@@ -31,7 +31,6 @@ var dnsbls = []dnsbl{
 	{"Spamhaus ZEN", "zen.spamhaus.org", kindIP, "critical", "https://check.spamhaus.org/", ""},
 	{"SpamCop", "bl.spamcop.net", kindIP, "critical", "https://www.spamcop.net/bl.shtml", "SpamCop listings expire 24 hours after the last report."},
 	{"Barracuda", "b.barracudacentral.org", kindIP, "critical", "https://www.barracudacentral.org/rbl/removal-request", ""},
-	{"SORBS", "dnsbl.sorbs.net", kindIP, "warning", "http://www.sorbs.net/delisting/", ""},
 	{"PSBL", "psbl.surriel.com", kindIP, "warning", "https://psbl.org/remove", ""},
 	{"Mailspike", "bl.mailspike.net", kindIP, "warning", "https://mailspike.org/iplookup.html", ""},
 	{"UCEPROTECT Level 1", "dnsbl-1.uceprotect.net", kindIP, "info",
@@ -39,7 +38,7 @@ var dnsbls = []dnsbl{
 		"Few providers block on UCEPROTECT; Level 1 entries expire on their own 7 days after the last spam seen, so the paid express delisting is rarely worth it."},
 	{"Manitu IX", "ix.dnsbl.manitu.net", kindIP, "warning", "https://www.dnsbl.manitu.net/", ""},
 	{"GBUdb Truncate", "truncate.gbudb.net", kindIP, "warning", "https://www.gbudb.com/truncate/", ""},
-	{"Spamhaus DBL", "dbl.spamhaus.org", kindDomain, "warning", "https://check.spamhaus.org/", ""},
+	{"Spamhaus DBL", "dbl.spamhaus.org", kindDomain, "critical", "https://check.spamhaus.org/", ""},
 	{"SURBL", "multi.surbl.org", kindDomain, "warning", "https://surbl.org/surbl-analysis", ""},
 }
 
@@ -56,7 +55,7 @@ const (
 )
 
 func init() {
-	registerCheck(check{key: "blacklist", label: "Blacklist", kinds: []string{kindIP, kindDomain}, run: blacklist, findings: blacklistFindings})
+	registerCheck(check{key: "blacklist", label: "Blacklist", kinds: []string{kindIP, kindDomain, kindHostname}, run: blacklist, findings: blacklistFindings})
 }
 
 // blVerdict is one blocklist's answer for one subject.
@@ -306,7 +305,13 @@ func blacklistFindings(target, _ string, _ map[string]string, raw json.RawMessag
 				if l.Note != "" {
 					msg += " " + l.Note
 				}
-				out = append(out, Finding{Code: "blacklist_listed", Severity: l.Severity,
+				sev := l.Severity
+				if l.Zone == "zen.spamhaus.org" && !slices.ContainsFunc(v.Codes, func(c string) bool { return zenCodes[c] != "PBL" }) {
+					// PBL is policy, not abuse: the range shouldn't send mail directly.
+					sev = "warning"
+					msg += " PBL lists address ranges that shouldn't send mail directly to other servers; it is not an abuse listing."
+				}
+				out = append(out, Finding{Code: "blacklist_listed", Severity: sev,
 					Title:          subject + " listed on " + l.Name,
 					Message:        msg,
 					Recommendation: "Find and stop the cause (a compromised account, open relay or bulk sending), then request removal at " + l.Delist + "."})

@@ -251,3 +251,11 @@ func (h *harness) waitSteps(caseID int64, n int) []diffedStep {
 	h.t.Fatalf("case never had %d finished steps", n)
 	return nil
 }
+
+// findingWith returns the first Finding with code, or nil.
+func findingWith(fs []finding, code string) *finding {
+	if i := slices.IndexFunc(fs, func(f finding) bool { return f.Code == code }); i != -1 {
+		return &fs[i]
+	}
+	return nil
+}

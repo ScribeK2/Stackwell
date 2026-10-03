@@ -62,13 +62,6 @@ func runBlacklist(t *testing.T, zone string, silent bool, target string) (blackl
 	return res, fs
 }
 
-func findingWith(fs []finding, code string) *finding {
-	if i := slices.IndexFunc(fs, func(f finding) bool { return f.Code == code }); i != -1 {
-		return &fs[i]
-	}
-	return nil
-}
-
 const zenListing = `
 7.113.0.203.zen.spamhaus.org. 300 IN A 127.0.0.2
 7.113.0.203.zen.spamhaus.org. 300 IN TXT "Listed by SBL, see https://check.spamhaus.org/sbl/query/SBL1"
@@ -80,7 +73,7 @@ func TestBlacklistReportsAListingWithItsReasonAndDelistLink(t *testing.T) {
 	if zen := lists["Spamhaus ZEN"]; zen.State != "listed" || zen.Codes[0] != "127.0.0.2" || !strings.Contains(zen.Reason, "SBL1") {
 		t.Fatalf("zen = %+v", zen)
 	}
-	if lists["SpamCop"].State != "clean" || len(lists) != 9 {
+	if lists["SpamCop"].State != "clean" || len(lists) != 8 {
 		t.Fatalf("lists = %+v", lists)
 	}
 	if _, ok := lists["Spamhaus DBL"]; ok {
@@ -124,7 +117,7 @@ func TestBlacklistTreatsARefusedQueryAsNeitherListedNorClean(t *testing.T) {
 		t.Fatalf("findings = %+v", fs)
 	}
 	ok := findingWith(fs, "blacklist_clean")
-	if ok == nil || !strings.Contains(ok.Message, "8 lists") {
+	if ok == nil || !strings.Contains(ok.Message, "7 lists") {
 		t.Fatalf("clean finding should count only the lists that answered: %+v", ok)
 	}
 }
@@ -232,5 +225,14 @@ func TestBlacklistIsOfferedForIPsAndDomains(t *testing.T) {
 		if c := newCase(h, target); !slices.Contains(c.Targets[0].Checks, "blacklist") {
 			t.Errorf("%s: checks %v", target, c.Targets[0].Checks)
 		}
+	}
+}
+
+func TestBlacklistPBLIsAPolicyWarningNotCritical(t *testing.T) {
+	_, fs := runBlacklist(t, `
+7.113.0.203.zen.spamhaus.org. 300 IN A 127.0.0.10`, false, "203.0.113.7")
+	f := findingWith(fs, "blacklist_listed")
+	if f == nil || f.Severity != "warning" || !strings.Contains(f.Message, "not an abuse listing") {
+		t.Fatalf("findings = %+v", fs)
 	}
 }
