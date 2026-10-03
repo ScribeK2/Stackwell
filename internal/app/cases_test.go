@@ -79,7 +79,8 @@ func TestInvalidTargetsAreRejected(t *testing.T) {
 func TestOnlyApplicableChecksAreOfferedAndRun(t *testing.T) {
 	h := start(t, app.Config{Net: app.Net{Resolver: fakeDNS(t, exampleZone, false)}})
 	c := newCase(h, "203.0.113.7")
-	if len(c.Targets[0].Checks) != 0 || len(c.Steps) != 0 {
+	// Other Checks may apply to IPs; DNS Lookup doesn't, and none run automatically.
+	if slices.Contains(c.Targets[0].Checks, "dns_lookup") || len(c.Steps) != 0 {
 		t.Fatalf("IP target: checks %v, steps %d; DNS Lookup doesn't apply to IPs", c.Targets[0].Checks, len(c.Steps))
 	}
 	d := newCase(h, "example.com")
