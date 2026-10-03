@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -21,9 +22,18 @@ import (
 	"github.com/ScribeK2/Stackwell/web"
 )
 
+// version is set at build time: -ldflags "-X main.version=1.2.3". The git tag is the source of truth.
+var version = "dev"
+
 func main() {
 	port := flag.Int("port", 0, "port on 127.0.0.1 (0 picks a free one)")
+	noBrowser := flag.Bool("no-browser", false, "print the URL instead of opening a browser")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	dataDir, err := dataDir()
 	if err != nil {
@@ -33,7 +43,7 @@ func main() {
 	if _, err := fs.Stat(ui, "index.html"); err != nil {
 		ui = nil // built without `npm run build`; serve the placeholder
 	}
-	srv, err := app.New(app.Config{DataDir: dataDir, Net: app.Net{Resolver: systemResolver()}, UI: ui})
+	srv, err := app.New(app.Config{Version: version, DataDir: dataDir, Net: app.Net{Resolver: systemResolver()}, UI: ui})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -43,7 +53,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("Stackwell running at http://%s\n", ln.Addr())
+	url := "http://" + ln.Addr().String()
+	fmt.Println("Stackwell running at", url)
+	if !*noBrowser && (os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "") {
+		// ponytail: plain xdg-open; app-mode window and single instance come in #4
+		if cmd := exec.Command("xdg-open", url); cmd.Start() != nil {
+			log.Printf("could not open a browser; open %s yourself", url)
+		} else {
+			go cmd.Wait()
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

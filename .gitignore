@@ -3,3 +3,5 @@
 !/web/dist/.gitkeep
 /stackwell
 /.playwright-mcp/
+/build/
+/Stackwell-*.AppImage

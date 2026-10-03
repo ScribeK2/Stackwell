@@ -21,6 +21,7 @@ type Net struct {
 }
 
 type Config struct {
+	Version      string
 	DataDir      string
 	Net          Net
 	CheckTimeout time.Duration // default 15s
@@ -70,6 +71,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/cases", s.createCase)
 	mux.HandleFunc("GET /api/cases/{id}", s.getCase)
 	mux.HandleFunc("GET /api/events", s.events.serve)
+	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": s.cfg.Version})
+	})
 	if s.cfg.UI != nil {
 		mux.Handle("/", http.FileServerFS(s.cfg.UI))
 	} else {

@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: # build + smoke without publishing
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The tag is the single source of truth for the version.
+      - id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-${GITHUB_SHA::7}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build AppImage
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          packaging/build-appimage.sh
+          sha256sum "Stackwell-$VERSION-x86_64.AppImage" > SHA256SUMS
+
+      - name: Smoke on the runner
+        run: packaging/smoke.sh "./Stackwell-${{ steps.version.outputs.version }}-x86_64.AppImage"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: appimage
+          path: |
+            Stackwell-*.AppImage
+            SHA256SUMS
+
+  smoke:
+    needs: build
+    strategy:
+      matrix:
+        image: ["archlinux:latest", "ubuntu:22.04"]
+    runs-on: ubuntu-latest
+    # Bare distro images: no libfuse2, no curl. Containers have no /dev/fuse and
+    # the runtime does not fall back on its own, so extract-and-run explicitly.
+    # The FUSE mount path is exercised by the runner smoke in the build job.
+    container: ${{ matrix.image }}
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: 1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: appimage
+      - run: |
+          chmod +x Stackwell-*.AppImage
+          packaging/smoke.sh ./Stackwell-${{ needs.build.outputs.version }}-x86_64.AppImage
+
+  release:
+    needs: [build, smoke]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: appimage
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" Stackwell-*.AppImage SHA256SUMS --repo "$GITHUB_REPOSITORY" --generate-notes

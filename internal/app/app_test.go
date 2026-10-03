@@ -355,3 +355,11 @@ func TestServesTheUI(t *testing.T) {
 		t.Fatalf("GET / = %d %q", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
 }
+
+func TestHealthReportsVersion(t *testing.T) {
+	h := start(t, app.Config{Version: "1.2.3", Net: app.Net{Resolver: fakeDNS(t, exampleZone, false)}})
+	var body struct{ Status, Version string }
+	if code := h.do("GET", "/api/health", nil, &body); code != http.StatusOK || body.Status != "ok" || body.Version != "1.2.3" {
+		t.Fatalf("health = %d %+v", code, body)
+	}
+}
