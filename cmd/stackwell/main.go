@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -34,6 +33,21 @@ func main() {
 		fmt.Println(version)
 		return
 	}
+	openWindow := !*noBrowser && hasDisplay()
+
+	inst, running, err := claim()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if inst == nil {
+		// Surface the running instance from here, with this launch's display.
+		fmt.Println("Stackwell already running at", running)
+		if openWindow {
+			openBrowser(running)
+		}
+		return
+	}
+	defer inst.Close()
 
 	dataDir, err := dataDir()
 	if err != nil {
@@ -55,13 +69,9 @@ func main() {
 	}
 	url := "http://" + ln.Addr().String()
 	fmt.Println("Stackwell running at", url)
-	if !*noBrowser && (os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "") {
-		// ponytail: plain xdg-open; app-mode window and single instance come in #4
-		if cmd := exec.Command("xdg-open", url); cmd.Start() != nil {
-			log.Printf("could not open a browser; open %s yourself", url)
-		} else {
-			go cmd.Wait()
-		}
+	go inst.serve(url)
+	if openWindow {
+		openBrowser(url)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

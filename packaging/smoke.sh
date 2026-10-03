@@ -5,7 +5,7 @@
 set -euo pipefail
 APPIMAGE="$1"; shift
 PORT=47800
-export XDG_DATA_HOME="$(mktemp -d)"
+export XDG_DATA_HOME="$(mktemp -d)" XDG_RUNTIME_DIR="$(mktemp -d)"
 
 "$APPIMAGE" "$@" --no-browser -port "$PORT" &
 PID=$!
