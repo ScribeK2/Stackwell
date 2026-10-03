@@ -66,6 +66,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/cases/{id}", s.editCase)
 	mux.HandleFunc("POST /api/cases/{id}/targets", s.addTarget)
 	mux.HandleFunc("POST /api/cases/{id}/steps", s.runCheck)
+	mux.HandleFunc("POST /api/cases/{id}/suggestions/dismiss", s.dismissSuggestion)
 	mux.HandleFunc("GET /api/active", s.getActive)
 	mux.HandleFunc("PUT /api/active", s.setActive)
 	mux.HandleFunc("GET /api/events", s.events.serve)
@@ -155,6 +156,22 @@ func (s *Server) runCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respondCase(w, http.StatusOK, id, s.runStep(id, *c, body.Target, opts))
+}
+
+// dismissSuggestion hides a suggested Target for this Case for good.
+func (s *Server) dismissSuggestion(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.caseID(w, r)
+	var body struct{ Value string }
+	if !ok || !decode(w, r, &body) {
+		return
+	}
+	// Normalised like a Target, so it matches the suggestion however it's written.
+	value, _, err := parseTarget(body.Value)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.respondCase(w, http.StatusOK, id, s.store.dismiss(id, value))
 }
 
 func (s *Server) editCase(w http.ResponseWriter, r *http.Request) {

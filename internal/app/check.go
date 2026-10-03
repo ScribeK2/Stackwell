@@ -87,6 +87,9 @@ type check struct {
 	run     func(ctx context.Context, n Net, target string, opts map[string]string) (any, error)
 	// findings applies the Check's rules to one finished, successful Step (nil: no rules yet).
 	findings func(target, kind string, opts map[string]string, result json.RawMessage) []Finding
+	// suggest lists Targets a successful Step's result points to (nil: none).
+	// Values are raw; they are normalised and filtered before the rep sees them.
+	suggest func(target string, opts map[string]string, result json.RawMessage) []Suggestion
 }
 
 // checks is the registry, in registration order. Each Check registers itself

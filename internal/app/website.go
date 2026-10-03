@@ -21,6 +21,7 @@ func init() {
 		kinds:    []string{kindDomain, kindHostname},
 		run:      websiteInspection,
 		findings: websiteFindings,
+		suggest:  websiteSuggestions,
 	})
 }
 
@@ -303,6 +304,25 @@ func websiteFindings(target, _ string, _ map[string]string, raw json.RawMessage)
 			Title:          "Slow response",
 			Message:        "The homepage took " + strconv.FormatInt(r.TimeMS, 10) + " ms to respond, redirects included.",
 			Recommendation: "Check server load, caching and slow plugins or database queries."})
+	}
+	return out
+}
+
+// websiteSuggestions offers every other host the site redirects to.
+func websiteSuggestions(target string, _ map[string]string, raw json.RawMessage) []Suggestion {
+	var r websiteResult
+	if json.Unmarshal(raw, &r) != nil {
+		return nil
+	}
+	var urls []string
+	for _, hop := range r.Chain {
+		urls = append(urls, hop.URL, hop.Location)
+	}
+	var out []Suggestion
+	for _, u := range append(urls, r.FinalURL) {
+		if h := urlHost(u); h != "" && h != target {
+			out = append(out, Suggestion{Value: h, Reason: "Redirect destination of " + target})
+		}
 	}
 	return out
 }

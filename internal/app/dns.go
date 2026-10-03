@@ -12,7 +12,7 @@ import (
 )
 
 func init() {
-	registerCheck(check{key: "dns_lookup", label: "DNS Lookup", kinds: []string{kindDomain, kindHostname}, auto: true, run: dnsLookup, findings: dnsFindings})
+	registerCheck(check{key: "dns_lookup", label: "DNS Lookup", kinds: []string{kindDomain, kindHostname}, auto: true, run: dnsLookup, findings: dnsFindings, suggest: dnsSuggestions})
 }
 
 var dnsLookupTypes = []uint16{dns.TypeA, dns.TypeAAAA, dns.TypeCNAME, dns.TypeMX, dns.TypeNS, dns.TypeTXT, dns.TypeSOA, dns.TypeCAA}
@@ -166,4 +166,27 @@ func exchange(ctx context.Context, server string, m *dns.Msg) (*dns.Msg, error) 
 	}
 	r, _, err = (&dns.Client{Net: "tcp"}).ExchangeContext(ctx, m, server)
 	return r, err
+}
+
+// dnsSuggestions offers the hosts and addresses a lookup points to.
+func dnsSuggestions(target string, _ map[string]string, raw json.RawMessage) []Suggestion {
+	var r dnsLookupResult
+	if json.Unmarshal(raw, &r) != nil {
+		return nil
+	}
+	var out []Suggestion
+	for _, mx := range r.Records["MX"] {
+		if _, host, ok := strings.Cut(mx, " "); ok && host != "." {
+			out = append(out, Suggestion{Value: host, Reason: "Mail server for " + target})
+		}
+	}
+	for _, c := range r.Records["CNAME"] {
+		out = append(out, Suggestion{Value: c, Reason: "Alias target of " + target})
+	}
+	for _, t := range []string{"A", "AAAA"} {
+		for _, ip := range r.Records[t] {
+			out = append(out, Suggestion{Value: ip, Reason: "Address of " + target})
+		}
+	}
+	return out
 }

@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { api, ApiError, caseName, type Case, type Step } from './lib/api'
+  import { api, ApiError, caseName, type Case, type Step, type Suggestion } from './lib/api'
   import Findings from './lib/Findings.svelte'
   import Help from './lib/Help.svelte'
   import Kbd from './lib/Kbd.svelte'
   import { checks } from './lib/checks.svelte'
   import Palette from './lib/Palette.svelte'
   import StepCard from './lib/StepCard.svelte'
+  import Suggestions from './lib/Suggestions.svelte'
   import { handleKey, keymap, moveInList, navList, register, type Action } from './lib/keymap.svelte'
 
   let input = $state('')
@@ -60,22 +61,49 @@
   // first Case exists joins that Case instead of starting another.
   let queue = Promise.resolve()
 
+  // Bumped whenever the rep starts or switches Cases. Work queued before a bump
+  // still lands on the Case it was meant for, but never repaints the screen.
+  let epoch = 0
+
+  // Runs a change on the Case that was open when the rep acted, in queue order.
+  function onCase(fn: (id: number) => Promise<Case>) {
+    const id = current?.id
+    const at = epoch
+    if (id === undefined) return
+    queue = queue.then(() =>
+      attempt(async () => {
+        const c = await fn(id)
+        if (epoch === at) show(c)
+      }),
+    )
+  }
+
+  // Accepting a suggestion is adding it as a Target (which runs its auto Checks).
+  const accept = (s: Suggestion) => onCase((id) => api<Case>('POST', `/api/cases/${id}/targets`, { target: s.value }))
+  const dismiss = (s: Suggestion) =>
+    onCase((id) => api<Case>('POST', `/api/cases/${id}/suggestions/dismiss`, { value: s.value }))
+
   // Clears the screen at once and queues behind any submission, so a Target
   // typed straight after n lands in the new Case, not the old one.
   function newCase() {
+    epoch++
     show(null)
     targetEl.focus()
     queue = queue.then(() => attempt(() => api('PUT', '/api/active', { case_id: null })))
   }
 
-  const switchTo = (id: number) =>
-    (queue = queue.then(() => attempt(async () => show((await api<{ case: Case }>('PUT', '/api/active', { case_id: id })).case))))
+  function switchTo(id: number) {
+    const at = ++epoch
+    queue = queue.then(() =>
+      attempt(async () => {
+        const r = await api<{ case: Case }>('PUT', '/api/active', { case_id: id })
+        if (epoch === at) show(r.case) // a later switch or new Case wins
+      }),
+    )
+  }
 
   const edit = (fields: Partial<Pick<Case, 'title' | 'ticket_ref' | 'status'>>) =>
-    attempt(async () => {
-      if (!current) return
-      show(await api<Case>('PATCH', `/api/cases/${current.id}`, fields))
-    })
+    onCase((id) => api<Case>('PATCH', `/api/cases/${id}`, fields))
 
   // Newest first; a Step is "earlier" once a newer Step of the same Check and Target exists.
   const steps = $derived.by(() => {
@@ -89,10 +117,7 @@
   })
 
   const runCheck = (check: string, target: string, options?: Record<string, string>) =>
-    attempt(async () => {
-      if (!current) return
-      show(await api<Case>('POST', `/api/cases/${current.id}/steps`, { check, target, options }))
-    })
+    onCase((id) => api<Case>('POST', `/api/cases/${id}/steps`, { check, target, options }))
 
   // A re-run repeats the Step exactly, options included, unless a view asks for others.
   const rerun = (step: Step, options?: Record<string, string>) => runCheck(step.check, step.target, options ?? step.options)
@@ -109,16 +134,21 @@
     const value = input.trim()
     if (!value) return
     input = ''
+    const at = epoch
+    const typedOn = current?.id
     queue = queue.then(() =>
       attempt(async () => {
+        // Same epoch: the current Case, which may have been created by an
+        // earlier Target in this run. Otherwise the Case it was typed on.
+        const id = epoch === at ? current?.id : typedOn
         try {
-          show(
-            current
-              ? await api<Case>('POST', `/api/cases/${current.id}/targets`, { target: value })
-              : await api<Case>('POST', '/api/cases', { target: value }),
-          )
+          const c =
+            id === undefined
+              ? await api<Case>('POST', '/api/cases', { target: value })
+              : await api<Case>('POST', `/api/cases/${id}/targets`, { target: value })
+          if (epoch === at) show(c)
         } catch (err) {
-          if (!input) input = value // give it back so the rep can fix it
+          if (!input && epoch === at) input = value // give it back so the rep can fix it
           throw err
         }
       }),
@@ -130,6 +160,13 @@
       { id: 'palette', title: 'Command palette', group: 'General', keys: ['mod+k', ':'], global: true, run: () => (keymap.paletteOpen = true) },
       { id: 'help', title: 'Show keyboard shortcuts', group: 'General', keys: ['?'], run: () => (keymap.helpOpen = true) },
       { id: 'new-case', title: 'New Case', group: 'Case', keys: ['n'], run: newCase },
+      {
+        id: 'focus-suggestions',
+        title: 'Go to suggested Targets',
+        group: 'Case',
+        keys: ['s'],
+        run: () => document.querySelector<HTMLElement>('[data-suggestion]')?.focus(),
+      },
       { id: 'focus-target', title: 'Add a Target', group: 'Case', keys: ['/'], run: () => targetEl.focus() },
       { id: 'rerun', title: 'Re-run focused Step', group: 'Case', keys: ['r'], run: rerunFocused },
       { id: 'next', title: 'Next item', group: 'Navigation', keys: ['j'], run: () => moveInList(1) },
@@ -171,6 +208,16 @@
     }
     return register(...actions)
   })
+
+  // Each suggestion can be added or dismissed from the palette too.
+  $effect(() =>
+    register(
+      ...(current?.suggestions ?? []).flatMap((s): Action[] => [
+        { id: `accept-${s.value}`, title: `Add ${s.value}`, group: s.reason, run: () => accept(s) },
+        { id: `dismiss-${s.value}`, title: `Dismiss suggestion ${s.value}`, group: s.reason, run: () => dismiss(s) },
+      ]),
+    ),
+  )
 
   // Recent Cases appear in the palette, searchable by title, Target or ticket reference.
   $effect(() => {
@@ -296,6 +343,9 @@
             </li>
           {/each}
         </ul>
+        {#if current.suggestions?.length}
+          <Suggestions suggestions={current.suggestions} onaccept={accept} ondismiss={dismiss} />
+        {/if}
       </section>
     {/if}
 

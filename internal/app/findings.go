@@ -28,22 +28,8 @@ func caseFindings(steps []Step, targets []Target) []Finding {
 	for _, t := range targets {
 		kinds[t.Value] = t.Kind
 	}
-	latest := map[[3]string]Step{}
-	var order [][3]string
-	for _, st := range steps { // id order, so later Steps overwrite earlier ones
-		if st.Status == "running" {
-			continue
-		}
-		key := [3]string{st.Check, st.Target, subjectKey(st)}
-		if _, seen := latest[key]; !seen {
-			order = append(order, key)
-		}
-		latest[key] = st
-	}
-
 	findings := []Finding{}
-	for _, key := range order {
-		st := latest[key]
+	for _, st := range latestSteps(steps) {
 		var fs []Finding
 		if st.Status == "failed" {
 			fs = []Finding{{Code: "check_failed", Severity: "warning",
@@ -67,4 +53,27 @@ func plural(n int, one, many string) string {
 		return "1 " + one
 	}
 	return strconv.Itoa(n) + " " + many
+}
+
+// latestSteps returns, in first-run order, the latest finished Step of each
+// Check per Target and subject options (Option.Subject): the current picture
+// that Findings and suggestions are drawn from.
+func latestSteps(steps []Step) []Step {
+	latest := map[[3]string]Step{}
+	var order [][3]string
+	for _, st := range steps { // id order, so later Steps overwrite earlier ones
+		if st.Status == "running" {
+			continue
+		}
+		key := [3]string{st.Check, st.Target, subjectKey(st)}
+		if _, seen := latest[key]; !seen {
+			order = append(order, key)
+		}
+		latest[key] = st
+	}
+	out := make([]Step, len(order))
+	for i, key := range order {
+		out[i] = latest[key]
+	}
+	return out
 }

@@ -40,7 +40,10 @@ export type Case = {
   targets: Target[]
   steps?: Step[]
   findings?: Finding[]
+  suggestions?: Suggestion[]
 }
+
+export type Suggestion = { value: string; kind: Target['kind']; reason: string; from: number }
 
 export class ApiError extends Error {}
 

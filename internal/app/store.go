@@ -42,6 +42,11 @@ var migrations = []string{
 	ALTER TABLE targets ADD COLUMN kind TEXT NOT NULL DEFAULT '';
 	CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
 	`ALTER TABLE steps ADD COLUMN options TEXT NOT NULL DEFAULT '{}';`,
+	`CREATE TABLE dismissed (
+		case_id INTEGER NOT NULL REFERENCES cases(id),
+		value   TEXT NOT NULL,
+		UNIQUE (case_id, value)
+	);`,
 }
 
 // Step is one execution of a Check inside a Case. Once finished it never changes.
@@ -68,15 +73,16 @@ type Target struct {
 }
 
 type Case struct {
-	ID           int64     `json:"id"`
-	Title        string    `json:"title"`
-	TicketRef    string    `json:"ticket_ref"`
-	Status       string    `json:"status"` // open | resolved
-	CreatedAt    time.Time `json:"created_at"`
-	LastActiveAt time.Time `json:"last_active_at"`
-	Targets      []Target  `json:"targets"`
-	Steps        []Step    `json:"steps,omitempty"`
-	Findings     []Finding `json:"findings,omitempty"`
+	ID           int64        `json:"id"`
+	Title        string       `json:"title"`
+	TicketRef    string       `json:"ticket_ref"`
+	Status       string       `json:"status"` // open | resolved
+	CreatedAt    time.Time    `json:"created_at"`
+	LastActiveAt time.Time    `json:"last_active_at"`
+	Targets      []Target     `json:"targets"`
+	Steps        []Step       `json:"steps,omitempty"`
+	Findings     []Finding    `json:"findings,omitempty"`
+	Suggestions  []Suggestion `json:"suggestions,omitempty"`
 }
 
 type store struct{ db *sql.DB }
@@ -334,6 +340,11 @@ func (s *store) getCase(id int64) (Case, error) {
 	}
 	compareSteps(c.Steps)
 	c.Findings = caseFindings(c.Steps, c.Targets)
+	dismissed, err := s.dismissed(id)
+	if err != nil {
+		return c, err
+	}
+	c.Suggestions = caseSuggestions(c.Steps, c.Targets, dismissed)
 	return c, nil
 }
 
@@ -393,6 +404,28 @@ func (s *store) classifyTargets() error {
 		}
 	}
 	return rows.Err()
+}
+
+func (s *store) dismiss(caseID int64, value string) error {
+	_, err := s.db.Exec(`INSERT INTO dismissed (case_id, value) VALUES (?, ?) ON CONFLICT DO NOTHING`, caseID, value)
+	return err
+}
+
+func (s *store) dismissed(caseID int64) ([]string, error) {
+	rows, err := s.db.Query(`SELECT value FROM dismissed WHERE case_id = ?`, caseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 // failRunning marks Steps left "running" by a previous process as failed;
