@@ -94,6 +94,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/cases/{id}", s.editCase)
 	mux.HandleFunc("POST /api/cases/{id}/targets", s.addTarget)
 	mux.HandleFunc("POST /api/cases/{id}/steps", s.runCheck)
+	mux.HandleFunc("GET /api/cases/{id}/writeup", s.getWriteup)
+	mux.HandleFunc("GET /api/cases/{id}/steps/{step}/text", s.getStepText)
 	mux.HandleFunc("POST /api/cases/{id}/suggestions/dismiss", s.dismissSuggestion)
 	mux.HandleFunc("GET /api/settings", s.getSettings)
 	mux.HandleFunc("PUT /api/settings/secrets/{name}", s.putSecret)
@@ -216,7 +218,7 @@ func (s *Server) editCase(w http.ResponseWriter, r *http.Request) {
 	if !ok || !decode(w, r, &e) {
 		return
 	}
-	for _, f := range []*string{e.Title, e.TicketRef} {
+	for _, f := range []*string{e.Title, e.TicketRef, e.Notes} {
 		if f != nil {
 			*f = strings.TrimSpace(*f)
 		}

@@ -38,6 +38,7 @@ export type Case = {
   title: string
   ticket_ref: string
   status: 'open' | 'resolved'
+  notes: string
   targets: Target[]
   steps?: Step[]
   findings?: Finding[]

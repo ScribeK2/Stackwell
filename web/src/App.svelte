@@ -5,7 +5,10 @@
   import Help from './lib/Help.svelte'
   import Kbd from './lib/Kbd.svelte'
   import { checks } from './lib/checks.svelte'
+  import { copyText, copyWriteup } from './lib/copy.svelte'
   import Palette from './lib/Palette.svelte'
+  import Toast from './lib/Toast.svelte'
+  import WriteUp from './lib/WriteUp.svelte'
   import Settings from './lib/Settings.svelte'
   import RunCard from './lib/RunCard.svelte'
   import StepCard from './lib/StepCard.svelte'
@@ -104,7 +107,7 @@
     )
   }
 
-  const edit = (fields: Partial<Pick<Case, 'title' | 'ticket_ref' | 'status'>>) =>
+  const edit = (fields: Partial<Pick<Case, 'title' | 'ticket_ref' | 'status' | 'notes'>>) =>
     onCase((id) => api<Case>('PATCH', `/api/cases/${id}`, fields))
 
   // Newest first; a Step is "earlier" once a newer Step of the same Check and Target exists.
@@ -172,6 +175,22 @@
       },
       { id: 'focus-target', title: 'Add a Target', group: 'Case', keys: ['/'], run: () => targetEl.focus() },
       { id: 'rerun', title: 'Re-run focused Step', group: 'Case', keys: ['r'], run: rerunFocused },
+      {
+        id: 'copy-writeup',
+        title: 'Copy Write-up (Markdown)',
+        group: 'Write-up',
+        keys: ['c'],
+        run: () => current && attempt(() => copyWriteup(current!.id, 'markdown')),
+      },
+      {
+        id: 'copy-writeup-text',
+        title: 'Copy Write-up (plain text)',
+        group: 'Write-up',
+        keys: ['C'],
+        run: () => current && attempt(() => copyWriteup(current!.id, 'text')),
+      },
+      { id: 'preview-writeup', title: 'Preview Write-up', group: 'Write-up', keys: ['w'], run: () => current && (keymap.writeupOpen = true) },
+      { id: 'focus-notes', title: 'Edit Rep notes', group: 'Case', keys: ['e'], run: () => document.getElementById('rep-notes')?.focus() },
       { id: 'next', title: 'Next item', group: 'Navigation', keys: ['j'], run: () => moveInList(1) },
       { id: 'prev', title: 'Previous item', group: 'Navigation', keys: ['k'], run: () => moveInList(-1) },
     ),
@@ -296,11 +315,12 @@
     return () => es.close()
   })
 
-  // Inline fields save on Enter or blur; Escape reverts.
-  function inlineField(node: HTMLInputElement, field: 'title' | 'ticket_ref') {
+  // Inline fields save on Enter (Ctrl+Enter for notes) or blur; Escape reverts.
+  function inlineField(node: HTMLInputElement | HTMLTextAreaElement, field: 'title' | 'ticket_ref' | 'notes') {
     const save = () => current && node.value.trim() !== current[field] && edit({ [field]: node.value })
-    const onkey = (e: KeyboardEvent) => {
-      if (e.key === 'Enter') node.blur()
+    const onkey = (ev: Event) => {
+      const e = ev as KeyboardEvent
+      if (e.key === 'Enter' && (field !== 'notes' || e.ctrlKey || e.metaKey)) node.blur()
       if (e.key === 'Escape' && current) {
         node.value = current[field]
         node.blur()
@@ -399,6 +419,29 @@
         {#if current.suggestions?.length}
           <Suggestions suggestions={current.suggestions} onaccept={accept} ondismiss={dismiss} />
         {/if}
+        <label for="rep-notes" class="sr-only">Rep notes</label>
+        <textarea
+          id="rep-notes"
+          value={current.notes}
+          use:inlineField={'notes'}
+          rows={current.notes ? Math.min(8, current.notes.split('\n').length + 1) : 1}
+          placeholder="Rep notes: what the customer said, what you tried. Goes into the Write-up."
+          class="mt-3 block w-full resize-none rounded-md border border-transparent bg-transparent px-1.5 py-1 -ml-1.5 text-sm leading-relaxed outline-none placeholder:text-subtle hover:border-line focus:border-accent focus:bg-surface focus-visible:outline-none"
+        ></textarea>
+        <div class="mt-1 flex gap-1.5">
+          <button
+            onclick={() => (keymap.writeupOpen = true)}
+            class="flex h-7 items-center gap-2 rounded-md border border-line px-2.5 text-xs text-muted transition-colors hover:border-line-strong hover:text-fg"
+          >
+            Write-up <Kbd key="w" />
+          </button>
+          <button
+            onclick={() => current && attempt(() => copyWriteup(current!.id, 'markdown'))}
+            class="flex h-7 items-center gap-2 rounded-md px-2.5 text-xs text-muted transition-colors hover:bg-raised hover:text-fg"
+          >
+            Copy <Kbd key="c" />
+          </button>
+        </div>
       </section>
     {/if}
 
@@ -441,7 +484,16 @@
       <section class="mt-6" aria-label="Steps">
         <div use:navList class="space-y-3">
           {#each steps as { step, earlier } (step.id)}
-            <StepCard {step} {earlier} onrerun={(options) => rerun(step, options)} />
+            <StepCard
+              {step}
+              {earlier}
+              onrerun={(options) => rerun(step, options)}
+              oncopy={() =>
+                current &&
+                attempt(async () =>
+                  copyText((await api<{ text: string }>('GET', `/api/cases/${current!.id}/steps/${step.id}/text`)).text, 'Step'),
+                )}
+            />
           {:else}
             <p class="py-6 text-center text-subtle">No Checks apply to these Targets yet.</p>
           {/each}
@@ -458,3 +510,5 @@
 <Palette />
 <Help />
 <Settings />
+<WriteUp caseID={current?.id} />
+<Toast />

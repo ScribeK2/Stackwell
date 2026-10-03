@@ -62,6 +62,7 @@ var migrations = []string{
 	);
 	ALTER TABLE steps ADD COLUMN run_id INTEGER REFERENCES playbook_runs(id);`,
 	`CREATE TABLE secrets (name TEXT PRIMARY KEY, hint TEXT NOT NULL, backend TEXT NOT NULL);`,
+	`ALTER TABLE cases ADD COLUMN notes TEXT NOT NULL DEFAULT '';`,
 }
 
 // Step is one execution of a Check inside a Case. Once finished it never changes.
@@ -93,6 +94,7 @@ type Case struct {
 	Title        string       `json:"title"`
 	TicketRef    string       `json:"ticket_ref"`
 	Status       string       `json:"status"` // open | resolved
+	Notes        string       `json:"notes"`  // Rep notes, included in the Write-up
 	CreatedAt    time.Time    `json:"created_at"`
 	LastActiveAt time.Time    `json:"last_active_at"`
 	Targets      []Target     `json:"targets"`
@@ -204,12 +206,13 @@ type caseEdit struct {
 	Title     *string `json:"title"`
 	TicketRef *string `json:"ticket_ref"`
 	Status    *string `json:"status"`
+	Notes     *string `json:"notes"`
 }
 
 func (s *store) editCase(id int64, e caseEdit) error {
 	_, err := s.db.Exec(`UPDATE cases SET
-		title = coalesce(?, title), ticket_ref = coalesce(?, ticket_ref), status = coalesce(?, status)
-		WHERE id = ?`, e.Title, e.TicketRef, e.Status, id)
+		title = coalesce(?, title), ticket_ref = coalesce(?, ticket_ref), status = coalesce(?, status), notes = coalesce(?, notes)
+		WHERE id = ?`, e.Title, e.TicketRef, e.Status, e.Notes, id)
 	return err
 }
 
@@ -306,12 +309,12 @@ func (s *store) finishStep(st *Step, result any, runErr error, cancelled bool) e
 	return err
 }
 
-const caseColumns = `id, title, ticket_ref, status, created_at, last_active_at`
+const caseColumns = `id, title, ticket_ref, status, notes, created_at, last_active_at`
 
 func scanCase(row interface{ Scan(...any) error }) (Case, error) {
 	var c Case
 	var created, active string
-	if err := row.Scan(&c.ID, &c.Title, &c.TicketRef, &c.Status, &created, &active); err != nil {
+	if err := row.Scan(&c.ID, &c.Title, &c.TicketRef, &c.Status, &c.Notes, &created, &active); err != nil {
 		return c, err
 	}
 	c.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)

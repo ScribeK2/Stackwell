@@ -17,6 +17,7 @@ class Keymap {
   paletteOpen = $state(false)
   helpOpen = $state(false)
   settingsOpen = $state(false)
+  writeupOpen = $state(false)
 }
 
 export const keymap = new Keymap()
@@ -49,7 +50,7 @@ export function handleKey(e: KeyboardEvent) {
   const key = keyOf(e)
   // Dialogs own the keyboard while open (Escape is handled natively), but our
   // own combos must not leak to the browser (Ctrl+K focuses its search bar).
-  if (keymap.paletteOpen || keymap.helpOpen || keymap.settingsOpen) {
+  if (keymap.paletteOpen || keymap.helpOpen || keymap.settingsOpen || keymap.writeupOpen) {
     if (keymap.actions.some((a) => a.global && a.keys?.includes(key))) e.preventDefault()
     return
   }
@@ -62,6 +63,8 @@ export function handleKey(e: KeyboardEvent) {
 
 /** Human-readable key for display: mod+k → Ctrl K. */
 export function keyLabel(key: string): string[] {
+  // A plain capital letter is typed with Shift: show it, so c and C differ.
+  if (key.length === 1 && key !== key.toLowerCase()) return ['Shift', key]
   return key.split('+').map((k) => (k === 'mod' ? 'Ctrl' : k.length === 1 ? k.toUpperCase() : k))
 }
 

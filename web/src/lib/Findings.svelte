@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Finding, Step } from './api'
   import { checks } from './checks.svelte'
+  import { copyText } from './copy.svelte'
 
   let { findings, steps }: { findings: Finding[]; steps: Step[] } = $props()
 
@@ -19,6 +20,9 @@
     const t = new Date(s.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     return `${checks.label(s.check)} at ${t}`
   }
+
+  const findingText = (f: Finding) =>
+    `${tone[f.severity].label} — ${f.title} (${f.target}): ${f.message}${f.recommendation ? ` → ${f.recommendation}` : ''}`
 
   function goTo(id: number) {
     const el = document.querySelector<HTMLElement>(`[data-step-id="${id}"]`)
@@ -48,6 +52,7 @@
           {#each f.citations as id}
             <button onclick={() => goTo(id)} class="text-subtle underline decoration-line underline-offset-2 hover:text-fg">{cite(id)}</button>
           {/each}
+          <button onclick={() => copyText(findingText(f), 'Finding')} aria-label="Copy Finding {f.title}" class="ml-auto text-subtle hover:text-fg">Copy</button>
         </p>
       </li>
     {/each}
