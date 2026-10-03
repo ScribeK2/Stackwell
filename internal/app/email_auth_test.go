@@ -83,13 +83,6 @@ func runEmailAuth(t *testing.T, zone string, opts map[string]string) (emailAuthR
 	return res, fs
 }
 
-func severityOf(fs []finding, code string) string {
-	if i := slices.IndexFunc(fs, func(f finding) bool { return f.Code == code }); i != -1 {
-		return fs[i].Severity
-	}
-	return ""
-}
-
 func wantFindings(t *testing.T, fs []finding, want map[string]string) {
 	t.Helper()
 	for code, sev := range want {
