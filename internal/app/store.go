@@ -63,6 +63,13 @@ var migrations = []string{
 	ALTER TABLE steps ADD COLUMN run_id INTEGER REFERENCES playbook_runs(id);`,
 	`CREATE TABLE secrets (name TEXT PRIMARY KEY, hint TEXT NOT NULL, backend TEXT NOT NULL);`,
 	`ALTER TABLE cases ADD COLUMN notes TEXT NOT NULL DEFAULT '';`,
+	`CREATE TABLE evidence (
+		id         INTEGER PRIMARY KEY,
+		case_id    INTEGER NOT NULL REFERENCES cases(id),
+		kind       TEXT NOT NULL,
+		raw        TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	);`,
 }
 
 // Step is one execution of a Check inside a Case. Once finished it never changes.
@@ -102,6 +109,7 @@ type Case struct {
 	Findings     []Finding    `json:"findings,omitempty"`
 	Suggestions  []Suggestion `json:"suggestions,omitempty"`
 	Runs         []Run        `json:"runs,omitempty"`
+	Evidence     []Evidence   `json:"evidence,omitempty"`
 }
 
 // Run is one execution of a Playbook in a Case. Its label and Boundary notes
@@ -388,13 +396,16 @@ func (s *store) getCase(id int64) (Case, error) {
 	if c.Steps, err = readSteps(tx, id); err != nil {
 		return c, err
 	}
+	if c.Evidence, err = readEvidence(tx, id); err != nil {
+		return c, err
+	}
 	compareSteps(c.Steps)
-	c.Findings = caseFindings(c.Steps, c.Targets)
+	c.Findings = caseFindings(c.Steps, c.Targets, c.Evidence)
 	dismissed, err := readDismissed(tx, id)
 	if err != nil {
 		return c, err
 	}
-	c.Suggestions = caseSuggestions(c.Steps, c.Targets, dismissed)
+	c.Suggestions = caseSuggestions(c.Steps, c.Targets, c.Evidence, dismissed)
 	c.Runs, err = readRuns(tx, id)
 	return c, err
 }

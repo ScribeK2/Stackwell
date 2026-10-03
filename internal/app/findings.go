@@ -13,7 +13,8 @@ type Finding struct {
 	Message        string  `json:"message"`
 	Recommendation string  `json:"recommendation,omitempty"`
 	Target         string  `json:"target"`
-	Citations      []int64 `json:"citations"`
+	Citations      []int64 `json:"citations"`          // Steps it came from
+	Evidence       []int64 `json:"evidence,omitempty"` // or Evidence it came from
 }
 
 var severityRank = map[string]int{"critical": 0, "warning": 1, "info": 2, "ok": 3}
@@ -23,7 +24,7 @@ var severityRank = map[string]int{"critical": 0, "warning": 1, "info": 2, "ok": 
 // the most recent run is the current picture, so a narrower run (SPF only)
 // replaces a broader one until the broader one is run again. Earlier Steps
 // only feed the before/after history.
-func caseFindings(steps []Step, targets []Target) []Finding {
+func caseFindings(steps []Step, targets []Target, evidence []Evidence) []Finding {
 	kinds := map[string]string{}
 	for _, t := range targets {
 		kinds[t.Value] = t.Kind
@@ -44,6 +45,7 @@ func caseFindings(steps []Step, targets []Target) []Finding {
 			findings = append(findings, f)
 		}
 	}
+	findings = append(findings, evidenceFindings(evidence)...)
 	slices.SortStableFunc(findings, func(a, b Finding) int { return severityRank[a.Severity] - severityRank[b.Severity] })
 	return findings
 }

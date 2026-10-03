@@ -19,7 +19,8 @@ export type Finding = {
   message: string
   recommendation?: string
   target: string
-  citations: number[]
+  citations: number[] // Steps
+  evidence?: number[] // or Evidence
 }
 
 export type Change = { field: string; removed?: string[]; added?: string[] }
@@ -44,7 +45,10 @@ export type Case = {
   findings?: Finding[]
   suggestions?: Suggestion[]
   runs?: Run[]
+  evidence?: Evidence[]
 }
+
+export type Evidence = { id: number; kind: string; raw: string; analysis: any; created_at: string }
 
 export type Run = {
   id: number
@@ -60,7 +64,7 @@ export type Run = {
 
 export type PlaybookInfo = { name: string; label: string; description?: string; kinds: string[]; boundary: string[]; source: string }
 
-export type Suggestion = { value: string; kind: Target['kind']; reason: string; from: number }
+export type Suggestion = { value: string; kind: Target['kind']; reason: string; from: number; evidence?: number }
 
 export class ApiError extends Error {}
 

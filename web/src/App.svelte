@@ -6,7 +6,9 @@
   import Kbd from './lib/Kbd.svelte'
   import { checks } from './lib/checks.svelte'
   import { copyText, copyWriteup } from './lib/copy.svelte'
+  import EvidenceCard from './lib/EvidenceCard.svelte'
   import Palette from './lib/Palette.svelte'
+  import PasteEvidence from './lib/PasteEvidence.svelte'
   import Toast from './lib/Toast.svelte'
   import WriteUp from './lib/WriteUp.svelte'
   import Settings from './lib/Settings.svelte'
@@ -190,6 +192,7 @@
         run: () => current && attempt(() => copyWriteup(current!.id, 'text')),
       },
       { id: 'preview-writeup', title: 'Preview Write-up', group: 'Write-up', keys: ['w'], run: () => current && (keymap.writeupOpen = true) },
+      { id: 'paste-evidence', title: 'Paste Evidence (email headers, logs)', group: 'Case', keys: ['v'], run: () => current && (keymap.evidenceOpen = true) },
       { id: 'focus-notes', title: 'Edit Rep notes', group: 'Case', keys: ['e'], run: () => document.getElementById('rep-notes')?.focus() },
       { id: 'next', title: 'Next item', group: 'Navigation', keys: ['j'], run: () => moveInList(1) },
       { id: 'prev', title: 'Previous item', group: 'Navigation', keys: ['k'], run: () => moveInList(-1) },
@@ -436,6 +439,12 @@
             Write-up <Kbd key="w" />
           </button>
           <button
+            onclick={() => (keymap.evidenceOpen = true)}
+            class="flex h-7 items-center gap-2 rounded-md px-2.5 text-xs text-muted transition-colors hover:bg-raised hover:text-fg"
+          >
+            Paste Evidence <Kbd key="v" />
+          </button>
+          <button
             onclick={() => current && attempt(() => copyWriteup(current!.id, 'markdown'))}
             class="flex h-7 items-center gap-2 rounded-md px-2.5 text-xs text-muted transition-colors hover:bg-raised hover:text-fg"
           >
@@ -480,6 +489,14 @@
       <Findings findings={current.findings} steps={current.steps ?? []} />
     {/if}
 
+    {#if current?.evidence?.length}
+      <section class="mt-6 space-y-3" aria-label="Evidence">
+        {#each [...current.evidence].reverse() as evidence (evidence.id)}
+          <EvidenceCard {evidence} />
+        {/each}
+      </section>
+    {/if}
+
     {#if current}
       <section class="mt-6" aria-label="Steps">
         <div use:navList class="space-y-3">
@@ -511,4 +528,5 @@
 <Help />
 <Settings />
 <WriteUp caseID={current?.id} />
+<PasteEvidence caseID={current?.id} onpasted={(c) => current?.id === c.id && show(c)} />
 <Toast />

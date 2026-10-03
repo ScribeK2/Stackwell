@@ -95,6 +95,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/cases/{id}/targets", s.addTarget)
 	mux.HandleFunc("POST /api/cases/{id}/steps", s.runCheck)
 	mux.HandleFunc("GET /api/cases/{id}/writeup", s.getWriteup)
+	mux.HandleFunc("POST /api/cases/{id}/evidence", s.postEvidence)
+	mux.HandleFunc("GET /api/evidence/kinds", evidenceKinds)
 	mux.HandleFunc("GET /api/cases/{id}/steps/{step}/text", s.getStepText)
 	mux.HandleFunc("POST /api/cases/{id}/suggestions/dismiss", s.dismissSuggestion)
 	mux.HandleFunc("GET /api/settings", s.getSettings)

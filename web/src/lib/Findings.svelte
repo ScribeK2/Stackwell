@@ -24,8 +24,8 @@
   const findingText = (f: Finding) =>
     `${tone[f.severity].label} — ${f.title} (${f.target}): ${f.message}${f.recommendation ? ` → ${f.recommendation}` : ''}`
 
-  function goTo(id: number) {
-    const el = document.querySelector<HTMLElement>(`[data-step-id="${id}"]`)
+  function goTo(id: number, attr = 'data-step-id') {
+    const el = document.querySelector<HTMLElement>(`[${attr}="${id}"]`)
     el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
     el?.focus({ preventScroll: true })
   }
@@ -37,7 +37,7 @@
     {#if problems.length}<span class="rounded bg-raised px-1.5 py-px font-mono text-[11px] tracking-normal text-muted normal-case">{problems.length}</span>{/if}
   </h2>
   <ul class="overflow-hidden rounded-lg border border-line bg-surface">
-    {#each problems as f (f.code + f.target + f.citations.join())}
+    {#each problems as f (f.code + f.target + f.citations.join() + (f.evidence ?? []).join())}
       <li class="border-b border-line px-3.5 py-3 last:border-b-0">
         <div class="flex items-baseline gap-2">
           <span class="flex shrink-0 items-center gap-1.5 text-xs font-medium {tone[f.severity].text}">
@@ -52,14 +52,21 @@
           {#each f.citations as id}
             <button onclick={() => goTo(id)} class="text-subtle underline decoration-line underline-offset-2 hover:text-fg">{cite(id)}</button>
           {/each}
+          {#each f.evidence ?? [] as id}
+            <button onclick={() => goTo(id, 'data-evidence-id')} class="text-subtle underline decoration-line underline-offset-2 hover:text-fg">Pasted Evidence #{id}</button>
+          {/each}
           <button onclick={() => copyText(findingText(f), 'Finding')} aria-label="Copy Finding {f.title}" class="ml-auto text-subtle hover:text-fg">Copy</button>
         </p>
       </li>
     {/each}
     {#if fine.length}
       <li class="flex flex-wrap gap-x-4 gap-y-1 px-3.5 py-2.5 text-xs">
-        {#each fine as f (f.code + f.target)}
-          <button onclick={() => goTo(f.citations[0])} class="flex items-center gap-1.5 text-muted hover:text-fg" title={f.message}>
+        {#each fine as f (f.code + f.target + (f.evidence ?? []).join())}
+          <button
+            onclick={() => (f.citations.length ? goTo(f.citations[0]) : goTo(f.evidence?.[0] ?? 0, 'data-evidence-id'))}
+            class="flex items-center gap-1.5 text-muted hover:text-fg"
+            title={f.message}
+          >
             <span class="size-1.5 rounded-full bg-ok"></span>{f.title}<span class="font-mono text-subtle">{f.target}</span>
           </button>
         {/each}
