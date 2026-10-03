@@ -5,3 +5,5 @@
 /.playwright-mcp/
 /build/
 /Stackwell-*.AppImage
+/web/test-results/
+/web/playwright-report/
