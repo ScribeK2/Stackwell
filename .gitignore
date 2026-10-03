@@ -7,3 +7,4 @@
 /Stackwell-*.AppImage
 /web/test-results/
 /web/playwright-report/
+/.claude/worktrees/
