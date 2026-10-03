@@ -126,13 +126,6 @@ func inspect(t *testing.T, https, plain http.Handler) (websiteResult, []finding)
 	return res, own
 }
 
-func severityOf(fs []finding, code string) string {
-	if i := slices.IndexFunc(fs, func(f finding) bool { return f.Code == code }); i != -1 {
-		return fs[i].Severity
-	}
-	return ""
-}
-
 func TestWebsiteHealthySiteWithEveryHeader(t *testing.T) {
 	https := allHeaders(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Server", "nginx")

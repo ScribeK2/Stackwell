@@ -259,3 +259,11 @@ func findingWith(fs []finding, code string) *finding {
 	}
 	return nil
 }
+
+// severityOf returns the severity of the first Finding with code, or "".
+func severityOf(fs []finding, code string) string {
+	if f := findingWith(fs, code); f != nil {
+		return f.Severity
+	}
+	return ""
+}

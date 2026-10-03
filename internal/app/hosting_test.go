@@ -132,15 +132,6 @@ func port(r hostingResult, n int) hostingPort {
 	return hostingPort{}
 }
 
-func severityOf(fs []finding, code string) string {
-	for _, f := range fs {
-		if f.Code == code {
-			return f.Severity
-		}
-	}
-	return ""
-}
-
 var webAndMail = map[int]string{80: "", 443: "", 25: "220 mx.example.com ESMTP Postfix\r\n250 more\r\n", 22: "SSH-2.0-OpenSSH_9.6\r\n"}
 
 func TestHostingQuickSweepClassifiesEachPort(t *testing.T) {
