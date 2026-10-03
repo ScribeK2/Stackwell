@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -75,10 +76,19 @@ var targetResolvers = map[string]targetResolver{
 //go:embed playbooks/*.yaml
 var builtinPlaybooks embed.FS
 
-// loadPlaybooks reads the built-in Playbooks and then any in dir (which win
-// by name), validating every one. Any invalid Playbook is an error.
-func loadPlaybooks(dir string) ([]Playbook, error) {
+// playbookError is a team Playbook file that couldn't be used, and why.
+type playbookError struct {
+	File  string `json:"file"`
+	Error string `json:"error"`
+}
+
+// loadPlaybooks reads the built-in Playbooks and then any in dir, which win
+// by name. A broken built-in is a bug in Stackwell and an error; a broken
+// file in the team's folder is reported and skipped, so one bad file never
+// takes the others down.
+func loadPlaybooks(dir string) ([]Playbook, []playbookError, error) {
 	var out []Playbook
+	problems := []playbookError{}
 	add := func(p Playbook) {
 		if i := slices.IndexFunc(out, func(q Playbook) bool { return q.Name == p.Name }); i != -1 {
 			out[i] = p
@@ -91,29 +101,41 @@ func loadPlaybooks(dir string) ([]Playbook, error) {
 		b, _ := builtinPlaybooks.ReadFile(f)
 		p, err := parsePlaybook(b)
 		if err != nil {
-			return nil, fmt.Errorf("built-in playbook %s: %w", f, err)
+			return nil, nil, fmt.Errorf("built-in playbook %s: %w", f, err)
 		}
 		p.Source = "built-in"
 		add(p)
 	}
 	if dir == "" {
-		return out, nil
+		return out, problems, nil
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return out, append(problems, playbookError{File: dir, Error: "folder not found"}), nil
 	}
 	files, _ := filepath.Glob(filepath.Join(dir, "*.y*ml"))
 	slices.Sort(files)
 	for _, f := range files {
 		b, err := os.ReadFile(f)
-		if err != nil {
-			return nil, err
+		if err == nil {
+			var p Playbook
+			if p, err = parsePlaybook(b); err == nil {
+				p.Source = f
+				add(p)
+				continue
+			}
 		}
-		p, err := parsePlaybook(b)
-		if err != nil {
-			return nil, fmt.Errorf("playbook %s: %w", f, err)
+		// If the broken file names a built-in, it was meant to replace it:
+		// withdraw the built-in rather than quietly run the stock Checks.
+		var named struct{ Name string }
+		if yaml.Unmarshal(b, &named) == nil && named.Name != "" {
+			if i := slices.IndexFunc(out, func(q Playbook) bool { return q.Name == named.Name && q.Source == "built-in" }); i != -1 {
+				out = slices.Delete(out, i, i+1)
+				err = fmt.Errorf("%w (the built-in %q is unavailable until this file is fixed)", err, named.Name)
+			}
 		}
-		p.Source = f
-		add(p)
+		problems = append(problems, playbookError{File: f, Error: err.Error()})
 	}
-	return out, nil
+	return out, problems, nil
 }
 
 func parsePlaybook(b []byte) (Playbook, error) {
@@ -194,11 +216,48 @@ func (p *Playbook) validate() error {
 	return nil
 }
 
+// reloadPlaybooks re-reads the team's folder (Settings, else Config.PlaybookDir),
+// so files a team pulls in take effect without a restart.
+func (s *Server) reloadPlaybooks() error {
+	// One reload at a time, so an older read of the folder never lands last.
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	dir, err := s.store.setting("playbook_dir")
+	if err != nil {
+		return err
+	}
+	if dir == "" {
+		dir = s.cfg.PlaybookDir
+	}
+	playbooks, problems, err := loadPlaybooks(dir)
+	if err != nil {
+		return err
+	}
+	s.pbMu.Lock()
+	s.playbooks, s.playbookErrors, s.playbookDir = playbooks, problems, dir
+	s.pbMu.Unlock()
+	return nil
+}
+
+// playbook returns a copy of the named Playbook as currently loaded, or nil.
 func (s *Server) playbook(name string) *Playbook {
+	s.pbMu.Lock()
+	defer s.pbMu.Unlock()
 	if i := slices.IndexFunc(s.playbooks, func(p Playbook) bool { return p.Name == name }); i != -1 {
-		return &s.playbooks[i]
+		p := s.playbooks[i]
+		return &p
 	}
 	return nil
+}
+
+func (s *Server) listPlaybooks(w http.ResponseWriter, r *http.Request) {
+	if err := s.reloadPlaybooks(); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.pbMu.Lock()
+	defer s.pbMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"folder": s.playbookDir, "playbooks": s.playbooks, "errors": s.playbookErrors})
 }
 
 // skip records why a Playbook entry didn't run.

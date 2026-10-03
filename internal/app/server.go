@@ -31,14 +31,19 @@ type Config struct {
 }
 
 type Server struct {
-	cfg       Config
-	store     *store
-	events    *broker
-	playbooks []Playbook
-	secrets   secretStore
-	ctx       context.Context
-	cancel    context.CancelFunc
-	steps     sync.WaitGroup // every running Step and Playbook run
+	cfg     Config
+	store   *store
+	events  *broker
+	secrets secretStore
+
+	reloadMu       sync.Mutex // serialises reloadPlaybooks
+	pbMu           sync.Mutex // guards the three below, reloaded from disk
+	playbooks      []Playbook
+	playbookErrors []playbookError
+	playbookDir    string
+	ctx            context.Context
+	cancel         context.CancelFunc
+	steps          sync.WaitGroup // every running Step and Playbook run
 
 	runsMu  sync.Mutex
 	running map[int64]context.CancelFunc // run id → cancel, while it runs
@@ -51,10 +56,6 @@ func New(cfg Config) (*Server, error) {
 	if cfg.ConfigDir == "" {
 		cfg.ConfigDir = cfg.DataDir
 	}
-	playbooks, err := loadPlaybooks(cfg.PlaybookDir)
-	if err != nil {
-		return nil, err
-	}
 	st, err := openStore(cfg.DataDir)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
@@ -66,9 +67,15 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{cfg: cfg, store: st, events: newBroker(), playbooks: playbooks, ctx: ctx, cancel: cancel,
+	s := &Server{cfg: cfg, store: st, events: newBroker(), ctx: ctx, cancel: cancel,
 		secrets: openSecrets(cfg.ConfigDir, cfg.TryKeyring),
-		running: map[int64]context.CancelFunc{}}, nil
+		running: map[int64]context.CancelFunc{}}
+	if err := s.reloadPlaybooks(); err != nil {
+		cancel()
+		st.db.Close()
+		return nil, err
+	}
+	return s, nil
 }
 
 // Close cancels running Steps, waits for them to be recorded, and closes the store.
@@ -91,7 +98,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings", s.getSettings)
 	mux.HandleFunc("PUT /api/settings/secrets/{name}", s.putSecret)
 	mux.HandleFunc("DELETE /api/settings/secrets/{name}", s.deleteSecret)
-	mux.HandleFunc("GET /api/playbooks", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, http.StatusOK, s.playbooks) })
+	mux.HandleFunc("PUT /api/settings", s.putSettings)
+	mux.HandleFunc("GET /api/playbooks", s.listPlaybooks)
 	mux.HandleFunc("POST /api/cases/{id}/runs", s.startRun)
 	mux.HandleFunc("POST /api/cases/{id}/runs/{run}/cancel", s.cancelRun)
 	mux.HandleFunc("GET /api/active", s.getActive)

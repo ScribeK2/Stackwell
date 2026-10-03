@@ -123,7 +123,7 @@ func refuseDial(ctx context.Context, network, addr string) (net.Conn, error) {
 
 func TestPlaybooksAreListedWithTheirKinds(t *testing.T) {
 	h := start(t, app.Config{Net: app.Net{Resolver: fakeDNS(t, exampleZone, false)}})
-	var list []struct {
+	type playbook struct {
 		Name     string   `json:"name"`
 		Label    string   `json:"label"`
 		Kinds    []string `json:"kinds"`
@@ -133,23 +133,13 @@ func TestPlaybooksAreListedWithTheirKinds(t *testing.T) {
 			Check string `json:"check"`
 		} `json:"entries"`
 	}
+	var list struct{ Playbooks []playbook }
 	h.do("GET", "/api/playbooks", nil, &list)
-	i := slices.IndexFunc(list, func(p struct {
-		Name     string   `json:"name"`
-		Label    string   `json:"label"`
-		Kinds    []string `json:"kinds"`
-		Boundary []string `json:"boundary"`
-		Entries  []struct {
-			ID    string `json:"id"`
-			Check string `json:"check"`
-		} `json:"entries"`
-	}) bool {
-		return p.Name == "orientation"
-	})
+	i := slices.IndexFunc(list.Playbooks, func(p playbook) bool { return p.Name == "orientation" })
 	if i == -1 {
-		t.Fatalf("no orientation playbook in %+v", list)
+		t.Fatalf("no orientation playbook in %+v", list.Playbooks)
 	}
-	o := list[i]
+	o := list.Playbooks[i]
 	if o.Label != "Orientation" || !slices.Equal(o.Kinds, []string{"domain"}) || len(o.Boundary) == 0 || len(o.Entries) != 3 {
 		t.Fatalf("orientation = %+v", o)
 	}
@@ -341,25 +331,6 @@ func TestADependentEntryIsSkippedWhenItsTargetCantBeDerived(t *testing.T) {
 			}
 			if steps := runSteps(got, run); len(steps) != 1 {
 				t.Fatalf("skipped entry still ran: %v", checksOf(steps))
-			}
-		})
-	}
-}
-
-func TestInvalidPlaybooksAreRejectedAtStart(t *testing.T) {
-	for name, yaml := range map[string]string{
-		"unknown check":     "name: x\nlabel: X\nkinds: [domain]\nentries:\n  - check: no_such_check\n",
-		"unknown depends":   "name: x\nlabel: X\nkinds: [domain]\nentries:\n  - check: dns_lookup\n    depends_on: nope\n",
-		"cycle":             "name: x\nlabel: X\nkinds: [domain]\nentries:\n  - id: a\n    check: dns_lookup\n    depends_on: b\n  - id: b\n    check: dns_lookup\n    depends_on: a\n",
-		"unknown resolver":  "name: x\nlabel: X\nkinds: [domain]\nentries:\n  - id: a\n    check: dns_lookup\n  - check: blacklist\n    depends_on: a\n    target: the_moon\n",
-		"kind not accepted": "name: x\nlabel: X\nkinds: [ip]\nentries:\n  - check: registration\n",
-		"bad option":        "name: x\nlabel: X\nkinds: [domain]\nentries:\n  - check: hosting_reachability\n    options: {depth: enormous}\n",
-		"not yaml":          "name: [unclosed\n",
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := app.New(app.Config{DataDir: t.TempDir(), PlaybookDir: writePlaybook(t, yaml)})
-			if err == nil {
-				t.Fatal("invalid Playbook accepted")
 			}
 		})
 	}

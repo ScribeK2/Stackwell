@@ -18,6 +18,10 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	if !ok || !decode(w, r, &body) {
 		return
 	}
+	if err := s.reloadPlaybooks(); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	p := s.playbook(body.Playbook)
 	if p == nil {
 		httpError(w, http.StatusBadRequest, "no such playbook: "+body.Playbook)

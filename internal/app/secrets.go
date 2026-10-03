@@ -181,11 +181,49 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	for i := range names {
 		names[i].Available = names[i].Backend == s.secrets.backend()
 	}
+	dir, err := s.store.setting("playbook_dir")
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"secrets_backend":  s.secrets.backend(),
 		"secrets_location": s.secrets.location(),
 		"secrets":          names,
+		"playbook_dir":     dir,
 	})
+}
+
+// putSettings changes plain settings: the team Playbook folder ("" clears it).
+func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		PlaybookDir *string `json:"playbook_dir"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.PlaybookDir != nil {
+		dir := strings.TrimSpace(*body.PlaybookDir)
+		if dir != "" {
+			if !filepath.IsAbs(dir) {
+				httpError(w, http.StatusBadRequest, "use the folder's full path")
+				return
+			}
+			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+				httpError(w, http.StatusBadRequest, dir+" is not a folder")
+				return
+			}
+		}
+		if err := s.store.setSetting("playbook_dir", dir); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := s.reloadPlaybooks(); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	s.getSettings(w, r)
 }
 
 // putSecret stores a value; it is never sent back, only its hint.

@@ -192,7 +192,12 @@
   onMount(() => void checks.load().catch(() => {}))
 
   let playbooks = $state<PlaybookInfo[]>([])
-  onMount(() => void api<PlaybookInfo[]>('GET', '/api/playbooks').then((p) => (playbooks = p), () => {}))
+  // Re-read when the palette opens: the server re-reads the team's folder,
+  // so Playbooks a team just pulled in show up without a restart.
+  $effect(() => {
+    void keymap.paletteOpen
+    api<{ playbooks: PlaybookInfo[] }>('GET', '/api/playbooks').then((r) => (playbooks = r.playbooks), () => {})
+  })
 
   const runPlaybook = (playbook: string, target: string) =>
     onCase((id) => api<Case>('POST', `/api/cases/${id}/runs`, { playbook, target }))
@@ -206,7 +211,7 @@
         actions.push({
           id: `playbook-${p.name}-${t.value}`,
           title: `Run ${p.label} Playbook on ${t.value}`,
-          group: 'Playbook',
+          group: p.source === 'built-in' ? 'Playbook' : 'Team Playbook',
           run: () => runPlaybook(p.name, t.value),
         })
       }

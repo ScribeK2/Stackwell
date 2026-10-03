@@ -237,6 +237,26 @@ func (s *store) setActive(id int64) error {
 	return tx.Commit()
 }
 
+// setting returns a stored setting, or "" if unset.
+func (s *store) setting(key string) (string, error) {
+	var v string
+	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return v, err
+}
+
+// setSetting stores a setting; "" removes it.
+func (s *store) setSetting(key, value string) error {
+	if value == "" {
+		_, err := s.db.Exec(`DELETE FROM settings WHERE key = ?`, key)
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, key, value)
+	return err
+}
+
 // activeCase returns the active Case's id, or 0 if none.
 func (s *store) activeCase() (int64, error) {
 	var id int64

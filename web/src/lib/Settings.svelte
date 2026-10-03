@@ -1,12 +1,17 @@
 <script lang="ts">
-  import { api, ApiError } from './api'
+  import { api, ApiError, type PlaybookInfo } from './api'
   import { keymap } from './keymap.svelte'
 
   type Settings = {
     secrets_backend: 'keyring' | 'file'
     secrets_location: string
     secrets: { name: string; hint: string; backend: string; available: boolean }[]
+    playbook_dir: string
   }
+  type PlaybookList = { folder: string; playbooks: PlaybookInfo[]; errors: { file: string; error: string }[] }
+
+  let playbooks = $state<PlaybookList | null>(null)
+  let folder = $state('')
 
   let dialog: HTMLDialogElement
   let settings = $state<Settings | null>(null)
@@ -36,7 +41,20 @@
     }
   }
 
-  const load = () => attempt(() => api<Settings>('GET', '/api/settings'))
+  // The field shows the folder actually in use, as the server reports it.
+  async function loadPlaybooks() {
+    playbooks = await api<PlaybookList>('GET', '/api/playbooks').catch(() => null)
+    if (playbooks) folder = playbooks.folder
+  }
+
+  async function load() {
+    await attempt(() => api<Settings>('GET', '/api/settings'))
+    loadPlaybooks()
+  }
+
+  async function saveFolder(dir: string) {
+    if (await attempt(() => api<Settings>('PUT', '/api/settings', { playbook_dir: dir.trim() }))) loadPlaybooks()
+  }
 
   // Values leave their field as soon as they're sent; only a hint comes back.
   const put = (secret: string, v: string) =>
@@ -64,7 +82,7 @@
   aria-label="Settings"
   onclose={() => (keymap.settingsOpen = false)}
   onclick={(e) => e.target === dialog && (keymap.settingsOpen = false)}
-  class="mx-auto mt-[12vh] w-[min(560px,calc(100vw-32px))] animate-pop rounded-xl bg-surface p-0 text-fg shadow-pop"
+  class="mx-auto mt-[10vh] max-h-[80vh] w-[min(560px,calc(100vw-32px))] animate-pop overflow-y-auto rounded-xl bg-surface p-0 text-fg shadow-pop"
 >
   <header class="flex h-11 items-center justify-between border-b border-line px-4">
     <h2 class="font-medium">Settings</h2>
@@ -142,5 +160,49 @@
       </form>
     {/if}
     {#if error}<p role="alert" class="text-xs text-crit">{error}</p>{/if}
+  </section>
+
+  <section class="space-y-3 border-t border-line p-4" aria-labelledby="playbooks-heading">
+    <div>
+      <h3 id="playbooks-heading" class="font-medium">Team Playbooks</h3>
+      <p class="mt-0.5 text-xs text-muted">
+        A folder of Playbook files (.yaml), e.g. a git clone your team shares. Its Playbooks add to the built-in ones, and
+        replace any with the same name. It is re-read whenever you open the command palette.
+      </p>
+    </div>
+    <form onsubmit={(e) => (e.preventDefault(), saveFolder(folder))} class="flex gap-1.5" aria-label="Playbook folder">
+      <input
+        bind:value={folder}
+        aria-label="Playbook folder path"
+        placeholder="/home/you/team-playbooks"
+        autocomplete="off"
+        spellcheck="false"
+        class="min-w-0 flex-1 rounded-md border border-line bg-transparent px-2 py-1 font-mono text-xs outline-none placeholder:text-subtle focus:border-accent"
+      />
+      <button class="rounded-md border border-line px-3 text-xs hover:border-line-strong">Save</button>
+      {#if settings?.playbook_dir}
+        <button type="button" onclick={() => saveFolder('')} class="rounded-md px-2 text-xs text-muted hover:text-fg">Clear</button>
+      {/if}
+    </form>
+
+    {#if playbooks}
+      {#if playbooks.errors.length}
+        <ul class="space-y-1 rounded-md border border-crit/40 bg-crit/5 p-2.5 text-xs" aria-label="Playbook files with problems">
+          {#each playbooks.errors as e (e.file)}
+            <li><span class="font-mono text-crit">{e.file.split('/').pop()}</span> <span class="text-muted">{e.error}</span></li>
+          {/each}
+        </ul>
+      {/if}
+      <ul class="divide-y divide-line rounded-md border border-line text-xs" aria-label="Playbooks">
+        {#each playbooks.playbooks as p (p.name)}
+          <li class="flex items-center gap-3 px-2.5 py-1.5">
+            <span class="font-medium">{p.label}</span>
+            <span class="ml-auto truncate font-mono text-subtle" title={p.source}>
+              {p.source === 'built-in' ? 'built-in' : p.source.split('/').pop()}
+            </span>
+          </li>
+        {/each}
+      </ul>
+    {/if}
   </section>
 </dialog>
