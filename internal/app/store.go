@@ -41,18 +41,20 @@ var migrations = []string{
 	UPDATE cases SET last_active_at = created_at;
 	ALTER TABLE targets ADD COLUMN kind TEXT NOT NULL DEFAULT '';
 	CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+	`ALTER TABLE steps ADD COLUMN options TEXT NOT NULL DEFAULT '{}';`,
 }
 
 // Step is one execution of a Check inside a Case. Once finished it never changes.
 type Step struct {
-	ID         int64           `json:"id"`
-	Check      string          `json:"check"`
-	Target     string          `json:"target"`
-	Status     string          `json:"status"` // running | ok | failed
-	Result     json.RawMessage `json:"result,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	StartedAt  time.Time       `json:"started_at"`
-	FinishedAt *time.Time      `json:"finished_at,omitempty"`
+	ID         int64             `json:"id"`
+	Check      string            `json:"check"`
+	Target     string            `json:"target"`
+	Options    map[string]string `json:"options"` // part of the Step's identity
+	Status     string            `json:"status"`  // running | ok | failed
+	Result     json.RawMessage   `json:"result,omitempty"`
+	Error      string            `json:"error,omitempty"`
+	StartedAt  time.Time         `json:"started_at"`
+	FinishedAt *time.Time        `json:"finished_at,omitempty"`
 	// Set on a successful Step when an earlier successful Step of the same
 	// Check on the same Target exists: that Step's id, and what differs.
 	ComparedTo int64    `json:"compared_to,omitempty"`
@@ -201,10 +203,19 @@ func (s *store) activeCase() (int64, error) {
 	return id, err
 }
 
-func (s *store) startStep(caseID int64, check, target string) (Step, error) {
-	st := Step{Check: check, Target: target, Status: "running", StartedAt: time.Now().UTC()}
-	res, err := s.db.Exec(`INSERT INTO steps (case_id, check_key, target, status, started_at) VALUES (?, ?, ?, ?, ?)`,
-		caseID, check, target, st.Status, st.StartedAt.Format(time.RFC3339Nano))
+// optionsKey is the canonical form of a Step's options (JSON sorts map keys).
+func optionsKey(opts map[string]string) string {
+	if opts == nil {
+		opts = map[string]string{}
+	}
+	b, _ := json.Marshal(opts)
+	return string(b)
+}
+
+func (s *store) startStep(caseID int64, check, target string, opts map[string]string) (Step, error) {
+	st := Step{Check: check, Target: target, Options: opts, Status: "running", StartedAt: time.Now().UTC()}
+	res, err := s.db.Exec(`INSERT INTO steps (case_id, check_key, target, options, status, started_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		caseID, check, target, optionsKey(opts), st.Status, st.StartedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return st, err
 	}
@@ -294,7 +305,7 @@ func (s *store) getCase(id int64) (Case, error) {
 		return c, err
 	}
 
-	rows, err := s.db.Query(`SELECT id, check_key, target, status, result, error, started_at, finished_at FROM steps WHERE case_id = ? ORDER BY id`, id)
+	rows, err := s.db.Query(`SELECT id, check_key, target, options, status, result, error, started_at, finished_at FROM steps WHERE case_id = ? ORDER BY id`, id)
 	if err != nil {
 		return c, err
 	}
@@ -303,10 +314,11 @@ func (s *store) getCase(id int64) (Case, error) {
 	for rows.Next() {
 		var st Step
 		var result, finished sql.NullString
-		var started string
-		if err := rows.Scan(&st.ID, &st.Check, &st.Target, &st.Status, &result, &st.Error, &started, &finished); err != nil {
+		var started, opts string
+		if err := rows.Scan(&st.ID, &st.Check, &st.Target, &opts, &st.Status, &result, &st.Error, &started, &finished); err != nil {
 			return c, err
 		}
+		json.Unmarshal([]byte(opts), &st.Options)
 		if result.Valid {
 			st.Result = json.RawMessage(result.String)
 		}
@@ -325,16 +337,19 @@ func (s *store) getCase(id int64) (Case, error) {
 	return c, nil
 }
 
+// stepIdentity is what makes two Steps runs of "the same thing".
+func stepIdentity(st Step) [3]string { return [3]string{st.Check, st.Target, optionsKey(st.Options)} }
+
 // compareSteps fills ComparedTo and Changes on each successful Step (in id
-// order) against the latest earlier successful Step of the same Check and Target.
+// order) against the latest earlier successful Step of the same identity.
 func compareSteps(steps []Step) {
-	last := map[[2]string]*Step{}
+	last := map[[3]string]*Step{}
 	for i := range steps {
 		st := &steps[i]
 		if st.Status != "ok" {
 			continue
 		}
-		key := [2]string{st.Check, st.Target}
+		key := stepIdentity(*st)
 		if prev := last[key]; prev != nil {
 			st.ComparedTo, st.Changes = prev.ID, diffResults(prev.Result, st.Result)
 		}
@@ -342,13 +357,13 @@ func compareSteps(steps []Step) {
 	}
 }
 
-// previousOK returns the latest successful Step of check on target in a Case
-// before the given Step id, or ok=false.
-func (s *store) previousOK(caseID int64, check, target string, before int64) (Step, bool) {
+// previousOK returns the latest successful Step with the same Check, Target
+// and options in a Case before the given Step id, or ok=false.
+func (s *store) previousOK(caseID int64, check, target string, opts map[string]string, before int64) (Step, bool) {
 	var st Step
 	var result string
-	err := s.db.QueryRow(`SELECT id, result FROM steps WHERE case_id = ? AND check_key = ? AND target = ? AND status = 'ok' AND id < ?
-		ORDER BY id DESC LIMIT 1`, caseID, check, target, before).Scan(&st.ID, &result)
+	err := s.db.QueryRow(`SELECT id, result FROM steps WHERE case_id = ? AND check_key = ? AND target = ? AND options = ? AND status = 'ok' AND id < ?
+		ORDER BY id DESC LIMIT 1`, caseID, check, target, optionsKey(opts), before).Scan(&st.ID, &result)
 	st.Result = json.RawMessage(result)
 	return st, err == nil
 }

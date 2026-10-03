@@ -12,44 +12,6 @@ import (
 	"github.com/ScribeK2/Stackwell/internal/app"
 )
 
-type change struct {
-	Field   string   `json:"field"`
-	Removed []string `json:"removed"`
-	Added   []string `json:"added"`
-}
-
-type diffedStep struct {
-	ID         int64    `json:"id"`
-	Status     string   `json:"status"`
-	ComparedTo int64    `json:"compared_to"`
-	Changes    []change `json:"changes"`
-}
-
-type diffedCase struct {
-	Steps []diffedStep `json:"steps"`
-}
-
-func (h *harness) rerun(caseID int64, check, target string) int {
-	h.t.Helper()
-	return h.do("POST", "/api/cases/"+itoa(caseID)+"/steps", map[string]string{"check": check, "target": target}, nil)
-}
-
-// waitSteps polls until the Case has n Steps, none running.
-func (h *harness) waitSteps(caseID int64, n int) []diffedStep {
-	h.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		var c diffedCase
-		h.do("GET", "/api/cases/"+itoa(caseID), nil, &c)
-		if len(c.Steps) == n && !slices.ContainsFunc(c.Steps, func(s diffedStep) bool { return s.Status == "running" }) {
-			return c.Steps
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	h.t.Fatalf("case never had %d finished steps", n)
-	return nil
-}
-
 const movedMX = `
 example.com. 300 IN A 93.184.216.34
 example.com. 300 IN AAAA 2606:2800:220:1:248:1893:25c8:1946

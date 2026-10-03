@@ -4,6 +4,7 @@
   import Findings from './lib/Findings.svelte'
   import Help from './lib/Help.svelte'
   import Kbd from './lib/Kbd.svelte'
+  import { checks } from './lib/checks.svelte'
   import Palette from './lib/Palette.svelte'
   import StepCard from './lib/StepCard.svelte'
   import { handleKey, keymap, moveInList, navList, register, type Action } from './lib/keymap.svelte'
@@ -82,11 +83,14 @@
     })
   })
 
-  const rerun = (step: Step) =>
+  const runCheck = (check: string, target: string, options?: Record<string, string>) =>
     attempt(async () => {
       if (!current) return
-      show(await api<Case>('POST', `/api/cases/${current.id}/steps`, { check: step.check, target: step.target }))
+      show(await api<Case>('POST', `/api/cases/${current.id}/steps`, { check, target, options }))
     })
+
+  // A re-run repeats the Step exactly, options included, unless a view asks for others.
+  const rerun = (step: Step, options?: Record<string, string>) => runCheck(step.check, step.target, options ?? step.options)
 
   function rerunFocused() {
     const id = Number((document.activeElement as HTMLElement | null)?.closest<HTMLElement>('[data-step-id]')?.dataset.stepId)
@@ -141,6 +145,29 @@
       group: 'Case',
       run: () => edit({ status: resolved ? 'open' : 'resolved' }),
     })
+  })
+
+  onMount(() => void checks.load().catch(() => {}))
+
+  // Every applicable Check on every Target of the open Case, one entry per
+  // choice of a Check's first select option.
+  $effect(() => {
+    const actions: Action[] = []
+    for (const t of current?.targets ?? []) {
+      for (const c of checks.list.filter((c) => t.checks.includes(c.key))) {
+        const select = c.options.find((o) => o.choices?.length)
+        for (const choice of select?.choices ?? [undefined]) {
+          const suffix = choice && choice !== select!.default ? ` (${select!.label.toLowerCase()}: ${choice})` : ''
+          actions.push({
+            id: `run-${c.key}-${choice ?? ''}-${t.value}`,
+            title: `Run ${c.label}${suffix} on ${t.value}`,
+            group: 'Run',
+            run: () => runCheck(c.key, t.value, choice ? { [select!.key]: choice } : undefined),
+          })
+        }
+      }
+    }
+    return register(...actions)
   })
 
   // Recent Cases appear in the palette, searchable by title, Target or ticket reference.
@@ -301,7 +328,7 @@
       <section class="mt-6" aria-label="Steps">
         <div use:navList class="space-y-3">
           {#each steps as { step, earlier } (step.id)}
-            <StepCard {step} {earlier} onrerun={() => rerun(step)} />
+            <StepCard {step} {earlier} onrerun={(options) => rerun(step, options)} />
           {:else}
             <p class="py-6 text-center text-subtle">No Checks apply to these Targets yet.</p>
           {/each}

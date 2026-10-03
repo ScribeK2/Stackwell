@@ -1,22 +1,34 @@
 <script lang="ts">
+  import type { Component } from 'svelte'
   import { fieldLabel, type Step } from './api'
+  import { checks, shownOptions } from './checks.svelte'
+  import Generic from './results/Generic.svelte'
 
-  let { step, earlier, onrerun }: { step: Step; earlier: boolean; onrerun: () => void } = $props()
+  type View = Component<{ step: Step; rerun: (options?: Record<string, string>) => void }>
+  // A Check's result view is lib/results/<check key>.svelte; anything else uses Generic.
+  const views = Object.fromEntries(
+    Object.entries(import.meta.glob<{ default: View }>('./results/*.svelte', { eager: true })).map(([path, m]) => [
+      path.slice('./results/'.length, -'.svelte'.length),
+      m.default,
+    ]),
+  )
 
-  const checkLabels: Record<string, string> = { dns_lookup: 'DNS Lookup' }
-  const recordOrder = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA', 'CAA']
+  let { step, earlier, onrerun }: { step: Step; earlier: boolean; onrerun: (options?: Record<string, string>) => void } =
+    $props()
 
   // Earlier runs start collapsed; the latest is always open.
   let expanded = $state(false)
   const open = $derived(!earlier || expanded)
   const time = $derived(new Date(step.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
+  const label = $derived(checks.label(step.check))
+  const View = $derived(views[step.check] ?? Generic)
 </script>
 
 <article
   data-nav-item
   data-step-id={step.id}
   tabindex="-1"
-  aria-label="{checkLabels[step.check] ?? step.check} {step.target} at {time}"
+  aria-label="{label} {step.target} at {time}"
   class="overflow-hidden rounded-lg border bg-surface transition-colors focus-visible:border-accent focus-visible:outline-none {earlier ? 'border-line/70' : 'border-line'}"
 >
   <header class="flex h-10 items-center gap-3 px-3.5 {open ? 'border-b border-line' : ''}">
@@ -26,8 +38,11 @@
       aria-expanded={earlier ? expanded : undefined}
       disabled={!earlier}
     >
-      <span class="font-medium">{checkLabels[step.check] ?? step.check}</span>
+      <span class="font-medium">{label}</span>
       <span class="truncate font-mono text-muted">{step.target}</span>
+      {#each shownOptions(step.check, step.options) as [k, v]}
+        <span class="rounded bg-raised px-1.5 text-xs text-muted">{k}: {v}</span>
+      {/each}
       {#if earlier}<span class="text-xs text-subtle">Earlier run</span>{/if}
     </button>
     <span class="font-mono text-xs text-subtle tabular-nums">{time}</span>
@@ -37,10 +52,10 @@
     </span>
     {#if !earlier}
       <button
-        onclick={onrerun}
+        onclick={() => onrerun()}
         disabled={step.status === 'running'}
         class="flex h-6 items-center rounded px-1.5 text-xs text-muted transition-colors hover:bg-raised hover:text-fg disabled:opacity-40"
-        aria-label="Re-run {checkLabels[step.check] ?? step.check} on {step.target}">Re-run <span class="ml-1.5 text-subtle">R</span></button>
+        aria-label="Re-run {label} on {step.target}">Re-run <span class="ml-1.5 text-subtle">R</span></button>
     {/if}
   </header>
 
@@ -69,24 +84,7 @@
     {#if step.status === 'failed'}
       <p class="px-3.5 py-3 text-crit">{step.error}</p>
     {:else if step.result}
-      {#if step.result.rcode !== 'NOERROR'}
-        <p class="px-3.5 pt-3 text-warn">{step.result.rcode === 'NXDOMAIN' ? 'Domain does not exist (NXDOMAIN)' : step.result.rcode}</p>
-      {/if}
-      {#each Object.entries(step.result.errors ?? {}) as [type, msg]}
-        <p class="px-3.5 pt-2 text-xs text-warn">{type} query failed: {msg}</p>
-      {/each}
-      <table class="my-1.5 w-full font-mono text-xs">
-        <tbody>
-          {#each recordOrder as type}
-            {#each step.result.records[type] ?? [] as value, i}
-              <tr class="align-top">
-                <th scope="row" class="w-20 py-1 pl-3.5 text-left font-sans font-medium text-subtle">{i === 0 ? type : ''}</th>
-                <td class="py-1 pr-3.5 break-all">{value}</td>
-              </tr>
-            {/each}
-          {/each}
-        </tbody>
-      </table>
+      <View {step} rerun={onrerun} />
     {/if}
   {/if}
 </article>

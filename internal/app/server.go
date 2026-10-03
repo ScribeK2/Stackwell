@@ -15,42 +15,12 @@ import (
 	"time"
 )
 
-// Net is every network capability a Check may use. Checks never reach the
-// network any other way, so tests can point them at local fakes.
-type Net struct {
-	Resolver string // host:port of the DNS resolver
-}
-
 type Config struct {
 	Version      string
 	DataDir      string
 	Net          Net
 	CheckTimeout time.Duration // default 15s
 	UI           fs.FS         // built frontend; nil serves a placeholder
-}
-
-type check struct {
-	key      string
-	label    string
-	kinds    []string // Target kinds it applies to
-	auto     bool     // runs when a Target of a matching kind is added
-	run      func(ctx context.Context, n Net, target string) (any, error)
-	findings func(target, kind string, result json.RawMessage) []Finding // nil: no rules yet
-}
-
-var checks = []check{
-	{key: "dns_lookup", label: "DNS Lookup", kinds: []string{kindDomain, kindHostname}, auto: true, run: dnsLookup, findings: dnsFindings},
-}
-
-// checksFor lists the keys of the Checks that apply to a Target kind.
-func checksFor(kind string) []string {
-	keys := []string{}
-	for _, c := range checks {
-		if slices.Contains(c.kinds, kind) {
-			keys = append(keys, c.key)
-		}
-	}
-	return keys
 }
 
 type Server struct {
@@ -89,6 +59,7 @@ func (s *Server) Close() error {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/checks", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, http.StatusOK, checkInfos()) })
 	mux.HandleFunc("GET /api/cases", s.listCases)
 	mux.HandleFunc("POST /api/cases", s.createCase)
 	mux.HandleFunc("GET /api/cases/{id}", s.getCase)
@@ -152,13 +123,21 @@ func (s *Server) addTarget(w http.ResponseWriter, r *http.Request) {
 // re-run that adds a new Step beside the earlier ones.
 func (s *Server) runCheck(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.caseID(w, r)
-	var body struct{ Check, Target string }
+	var body struct {
+		Check, Target string
+		Options       map[string]string
+	}
 	if !ok || !decode(w, r, &body) {
 		return
 	}
-	i := slices.IndexFunc(checks, func(c check) bool { return c.key == body.Check })
-	if i == -1 {
+	c := checkByKey(body.Check)
+	if c == nil {
 		httpError(w, http.StatusBadRequest, "no such check: "+body.Check)
+		return
+	}
+	opts, err := c.resolveOptions(body.Options)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	targets, err := s.store.targets(id)
@@ -175,7 +154,7 @@ func (s *Server) runCheck(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, body.Check+" does not apply to "+targets[t].Kind+" Targets")
 		return
 	}
-	s.respondCase(w, http.StatusOK, id, s.runStep(id, checks[i], body.Target))
+	s.respondCase(w, http.StatusOK, id, s.runStep(id, *c, body.Target, opts))
 }
 
 func (s *Server) editCase(w http.ResponseWriter, r *http.Request) {
@@ -260,7 +239,8 @@ func (s *Server) setActive(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runAuto(caseID int64, value, kind string) error {
 	for _, c := range checks {
 		if c.auto && slices.Contains(c.kinds, kind) {
-			if err := s.runStep(caseID, c, value); err != nil {
+			opts, _ := c.resolveOptions(nil) // defaults always validate
+			if err := s.runStep(caseID, c, value, opts); err != nil {
 				return err
 			}
 		}
@@ -302,8 +282,8 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 
 // runStep records a running Step and executes the Check in the background,
 // publishing the Step when it starts and when it finishes.
-func (s *Server) runStep(caseID int64, c check, target string) error {
-	st, err := s.store.startStep(caseID, c.key, target)
+func (s *Server) runStep(caseID int64, c check, target string, opts map[string]string) error {
+	st, err := s.store.startStep(caseID, c.key, target, opts)
 	if err != nil {
 		return err
 	}
@@ -311,12 +291,12 @@ func (s *Server) runStep(caseID int64, c check, target string) error {
 	s.steps.Go(func() {
 		ctx, cancel := context.WithTimeout(s.ctx, s.cfg.CheckTimeout)
 		defer cancel()
-		result, runErr := c.run(ctx, s.cfg.Net, target)
+		result, runErr := c.run(ctx, s.cfg.Net, target, opts)
 		if err := s.store.finishStep(&st, result, runErr); err != nil {
 			st.Status, st.Error = "failed", "could not save result: "+err.Error()
 		}
 		if st.Status == "ok" {
-			if prev, ok := s.store.previousOK(caseID, c.key, target, st.ID); ok {
+			if prev, ok := s.store.previousOK(caseID, c.key, target, opts, st.ID); ok {
 				st.ComparedTo, st.Changes = prev.ID, diffResults(prev.Result, st.Result)
 			}
 		}

@@ -2,9 +2,10 @@ export type Step = {
   id: number
   check: string
   target: string
+  options: Record<string, string>
   status: 'running' | 'ok' | 'failed'
   error?: string
-  result?: { rcode: string; records: Record<string, string[]>; errors?: Record<string, string> }
+  result?: any // shape is per Check; see lib/results/<check>.svelte
   started_at: string
   compared_to?: number // id of the earlier Step this one is compared against
   changes?: Change[]
@@ -64,3 +65,6 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
 export function caseName(c: Case): string {
   return c.title || c.targets[0]?.value || `Case #${c.id}`
 }
+
+export type CheckOption = { key: string; label: string; choices?: string[]; default: string }
+export type CheckInfo = { key: string; label: string; kinds: string[]; options: CheckOption[] }

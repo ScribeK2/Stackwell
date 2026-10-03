@@ -1,9 +1,9 @@
 <script lang="ts">
   import type { Finding, Step } from './api'
+  import { checks } from './checks.svelte'
 
   let { findings, steps }: { findings: Finding[]; steps: Step[] } = $props()
 
-  const checkLabels: Record<string, string> = { dns_lookup: 'DNS Lookup' }
   const tone = {
     critical: { dot: 'bg-crit', text: 'text-crit', label: 'Critical' },
     warning: { dot: 'bg-warn', text: 'text-warn', label: 'Warning' },
@@ -17,7 +17,7 @@
     const s = steps.find((s) => s.id === id)
     if (!s) return `Step ${id}`
     const t = new Date(s.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    return `${checkLabels[s.check] ?? s.check} at ${t}`
+    return `${checks.label(s.check)} at ${t}`
   }
 
   function goTo(id: number) {
