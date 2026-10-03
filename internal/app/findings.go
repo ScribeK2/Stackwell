@@ -62,8 +62,8 @@ func latestSteps(steps []Step) []Step {
 	latest := map[[3]string]Step{}
 	var order [][3]string
 	for _, st := range steps { // id order, so later Steps overwrite earlier ones
-		if st.Status == "running" {
-			continue
+		if st.Status == "running" || st.Status == "cancelled" {
+			continue // not a result: never replaces the last real run
 		}
 		key := [3]string{st.Check, st.Target, subjectKey(st)}
 		if _, seen := latest[key]; !seen {

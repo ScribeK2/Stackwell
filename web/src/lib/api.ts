@@ -3,7 +3,8 @@ export type Step = {
   check: string
   target: string
   options: Record<string, string>
-  status: 'running' | 'ok' | 'failed'
+  status: 'running' | 'ok' | 'failed' | 'cancelled'
+  run_id?: number // the Playbook run that started it
   error?: string
   result?: any // shape is per Check; see lib/results/<check>.svelte
   started_at: string
@@ -41,7 +42,22 @@ export type Case = {
   steps?: Step[]
   findings?: Finding[]
   suggestions?: Suggestion[]
+  runs?: Run[]
 }
+
+export type Run = {
+  id: number
+  playbook: string
+  label: string
+  target: string
+  boundary: string[] | null
+  skipped: { entry: string; reason: string }[] | null
+  total: number
+  status: 'running' | 'done' | 'cancelled'
+  started_at: string
+}
+
+export type PlaybookInfo = { name: string; label: string; description?: string; kinds: string[]; boundary: string[]; source: string }
 
 export type Suggestion = { value: string; kind: Target['kind']; reason: string; from: number }
 

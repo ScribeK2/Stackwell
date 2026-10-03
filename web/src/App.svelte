@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { api, ApiError, caseName, type Case, type Step, type Suggestion } from './lib/api'
+  import { api, ApiError, caseName, type Case, type PlaybookInfo, type Step, type Suggestion } from './lib/api'
   import Findings from './lib/Findings.svelte'
   import Help from './lib/Help.svelte'
   import Kbd from './lib/Kbd.svelte'
   import { checks } from './lib/checks.svelte'
   import Palette from './lib/Palette.svelte'
+  import RunCard from './lib/RunCard.svelte'
   import StepCard from './lib/StepCard.svelte'
   import Suggestions from './lib/Suggestions.svelte'
   import { handleKey, keymap, moveInList, navList, register, type Action } from './lib/keymap.svelte'
@@ -188,6 +189,32 @@
 
   onMount(() => void checks.load().catch(() => {}))
 
+  let playbooks = $state<PlaybookInfo[]>([])
+  onMount(() => void api<PlaybookInfo[]>('GET', '/api/playbooks').then((p) => (playbooks = p), () => {}))
+
+  const runPlaybook = (playbook: string, target: string) =>
+    onCase((id) => api<Case>('POST', `/api/cases/${id}/runs`, { playbook, target }))
+  const cancelRun = (run: number) => onCase((id) => api<Case>('POST', `/api/cases/${id}/runs/${run}/cancel`))
+
+  // Playbooks for each Target they apply to, and Cancel for running ones.
+  $effect(() => {
+    const actions: Action[] = []
+    for (const t of current?.targets ?? []) {
+      for (const p of playbooks.filter((p) => p.kinds.includes(t.kind))) {
+        actions.push({
+          id: `playbook-${p.name}-${t.value}`,
+          title: `Run ${p.label} Playbook on ${t.value}`,
+          group: 'Playbook',
+          run: () => runPlaybook(p.name, t.value),
+        })
+      }
+    }
+    for (const r of (current?.runs ?? []).filter((r) => r.status === 'running')) {
+      actions.push({ id: `cancel-run-${r.id}`, title: `Cancel ${r.label} on ${r.target}`, group: 'Playbook', run: () => cancelRun(r.id) })
+    }
+    return register(...actions)
+  })
+
   // Every applicable Check on every Target of the open Case, one entry per
   // choice of a Check's first select option.
   $effect(() => {
@@ -242,7 +269,12 @@
     // On (re)connect, events may have been missed: re-fetch the open Case.
     es.onopen = () => current && refresh(current.id)
     es.onmessage = (e) => {
-      const { case_id, step } = JSON.parse(e.data) as { case_id: number; step: Step }
+      const { case_id, step } = JSON.parse(e.data) as { case_id: number; step?: Step }
+      if (!step) {
+        // A Playbook run changed status: its record lives on the Case.
+        if (current?.id === case_id) refresh(case_id)
+        return
+      }
       seen.set(step.id, step)
       if (!current?.steps || current.id !== case_id) return
       const i = current.steps.findIndex((s) => s.id === step.id)
@@ -371,6 +403,14 @@
       <span class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 group-focus-within:hidden"><Kbd key="/" /></span>
     </form>
     {#if error}<p role="alert" class="mt-2 text-crit">{error}</p>{/if}
+
+    {#if current?.runs?.length}
+      <section aria-label="Playbook runs" class="mt-6 space-y-2">
+        {#each [...current.runs].reverse().slice(0, 3) as run (run.id)}
+          <RunCard {run} steps={current.steps ?? []} oncancel={() => cancelRun(run.id)} />
+        {/each}
+      </section>
+    {/if}
 
     {#if current?.findings?.length}
       <Findings findings={current.findings} steps={current.steps ?? []} />

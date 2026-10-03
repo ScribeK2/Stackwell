@@ -16,7 +16,16 @@ type broker struct {
 func newBroker() *broker { return &broker{subs: map[chan []byte]struct{}{}} }
 
 func (b *broker) publish(caseID int64, st Step) {
-	msg, _ := json.Marshal(map[string]any{"case_id": caseID, "step": st})
+	b.send(map[string]any{"case_id": caseID, "step": st})
+}
+
+// publishRun announces a Playbook run's change of status (its Steps announce themselves).
+func (b *broker) publishRun(caseID int64, r Run) {
+	b.send(map[string]any{"case_id": caseID, "run": r})
+}
+
+func (b *broker) send(event map[string]any) {
+	msg, _ := json.Marshal(event)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for ch := range b.subs {

@@ -47,8 +47,16 @@
     </button>
     <span class="font-mono text-xs text-subtle tabular-nums">{time}</span>
     <span class="flex w-16 items-center gap-1.5 text-xs text-muted">
-      <span class="size-1.5 rounded-full {step.status === 'ok' ? 'bg-ok' : step.status === 'failed' ? 'bg-crit' : 'animate-pulse bg-subtle'}"></span>
-      {step.status === 'running' ? 'Running' : step.status === 'ok' ? 'Done' : 'Failed'}
+      <span
+        class="size-1.5 rounded-full {step.status === 'ok'
+          ? 'bg-ok'
+          : step.status === 'failed'
+            ? 'bg-crit'
+            : step.status === 'cancelled'
+              ? 'bg-subtle'
+              : 'animate-pulse bg-subtle'}"
+      ></span>
+      {{ running: 'Running', ok: 'Done', failed: 'Failed', cancelled: 'Cancelled' }[step.status]}
     </span>
     {#if !earlier}
       <button
@@ -81,7 +89,9 @@
       {/if}
     {/if}
 
-    {#if step.status === 'failed'}
+    {#if step.status === 'cancelled'}
+      <p class="px-3.5 py-3 text-subtle">Cancelled before it finished.</p>
+    {:else if step.status === 'failed'}
       <p class="px-3.5 py-3 text-crit">{step.error}</p>
     {:else if step.result}
       <View {step} rerun={onrerun} />

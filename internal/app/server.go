@@ -21,20 +21,31 @@ type Config struct {
 	Net          Net
 	CheckTimeout time.Duration // default 15s
 	UI           fs.FS         // built frontend; nil serves a placeholder
+	// PlaybookDir holds the team's Playbooks (*.yaml), which add to or
+	// override the built-in ones by name. Empty: built-ins only.
+	PlaybookDir string
 }
 
 type Server struct {
-	cfg    Config
-	store  *store
-	events *broker
-	ctx    context.Context
-	cancel context.CancelFunc
-	steps  sync.WaitGroup
+	cfg       Config
+	store     *store
+	events    *broker
+	playbooks []Playbook
+	ctx       context.Context
+	cancel    context.CancelFunc
+	steps     sync.WaitGroup // every running Step and Playbook run
+
+	runsMu  sync.Mutex
+	running map[int64]context.CancelFunc // run id → cancel, while it runs
 }
 
 func New(cfg Config) (*Server, error) {
 	if cfg.CheckTimeout == 0 {
 		cfg.CheckTimeout = 15 * time.Second
+	}
+	playbooks, err := loadPlaybooks(cfg.PlaybookDir)
+	if err != nil {
+		return nil, err
 	}
 	st, err := openStore(cfg.DataDir)
 	if err != nil {
@@ -47,7 +58,8 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{cfg: cfg, store: st, events: newBroker(), ctx: ctx, cancel: cancel}, nil
+	return &Server{cfg: cfg, store: st, events: newBroker(), playbooks: playbooks, ctx: ctx, cancel: cancel,
+		running: map[int64]context.CancelFunc{}}, nil
 }
 
 // Close cancels running Steps, waits for them to be recorded, and closes the store.
@@ -67,6 +79,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/cases/{id}/targets", s.addTarget)
 	mux.HandleFunc("POST /api/cases/{id}/steps", s.runCheck)
 	mux.HandleFunc("POST /api/cases/{id}/suggestions/dismiss", s.dismissSuggestion)
+	mux.HandleFunc("GET /api/playbooks", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, http.StatusOK, s.playbooks) })
+	mux.HandleFunc("POST /api/cases/{id}/runs", s.startRun)
+	mux.HandleFunc("POST /api/cases/{id}/runs/{run}/cancel", s.cancelRun)
 	mux.HandleFunc("GET /api/active", s.getActive)
 	mux.HandleFunc("PUT /api/active", s.setActive)
 	mux.HandleFunc("GET /api/events", s.events.serve)
@@ -155,7 +170,8 @@ func (s *Server) runCheck(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, body.Check+" does not apply to "+targets[t].Kind+" Targets")
 		return
 	}
-	s.respondCase(w, http.StatusOK, id, s.runStep(id, *c, body.Target, opts))
+	_, err = s.runStep(s.ctx, id, *c, body.Target, opts, 0)
+	s.respondCase(w, http.StatusOK, id, err)
 }
 
 // dismissSuggestion hides a suggested Target for this Case for good.
@@ -257,7 +273,7 @@ func (s *Server) runAuto(caseID int64, value, kind string) error {
 	for _, c := range checks {
 		if c.auto && slices.Contains(c.kinds, kind) {
 			opts, _ := c.resolveOptions(nil) // defaults always validate
-			if err := s.runStep(caseID, c, value, opts); err != nil {
+			if _, err := s.runStep(s.ctx, caseID, c, value, opts, 0); err != nil {
 				return err
 			}
 		}
@@ -297,19 +313,25 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// runStep records a running Step and executes the Check in the background,
-// publishing the Step when it starts and when it finishes.
-func (s *Server) runStep(caseID int64, c check, target string, opts map[string]string) error {
-	st, err := s.store.startStep(caseID, c.key, target, opts)
+// runStep records a running Step and executes the Check in the background
+// under parent (the server, or a Playbook run that can be cancelled),
+// publishing the Step when it starts and when it finishes. The channel
+// delivers the finished Step.
+func (s *Server) runStep(parent context.Context, caseID int64, c check, target string, opts map[string]string, runID int64) (<-chan Step, error) {
+	st, err := s.store.startStep(caseID, c.key, target, opts, runID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	s.events.publish(caseID, st)
+	done := make(chan Step, 1)
 	s.steps.Go(func() {
-		ctx, cancel := context.WithTimeout(s.ctx, s.cfg.CheckTimeout)
+		ctx, cancel := context.WithTimeout(parent, s.cfg.CheckTimeout)
 		defer cancel()
 		result, runErr := c.run(ctx, s.cfg.Net, target, opts)
-		if err := s.store.finishStep(&st, result, runErr); err != nil {
+		// Cancelled only if it ended because the rep (or shutdown) stopped it:
+		// a result that arrived just before the cancel is still a result.
+		cancelled := runErr != nil && parent.Err() != nil
+		if err := s.store.finishStep(&st, result, runErr, cancelled); err != nil {
 			st.Status, st.Error = "failed", "could not save result: "+err.Error()
 		}
 		if st.Status == "ok" {
@@ -318,8 +340,9 @@ func (s *Server) runStep(caseID int64, c check, target string, opts map[string]s
 			}
 		}
 		s.events.publish(caseID, st)
+		done <- st
 	})
-	return nil
+	return done, nil
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

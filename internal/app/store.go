@@ -47,6 +47,20 @@ var migrations = []string{
 		value   TEXT NOT NULL,
 		UNIQUE (case_id, value)
 	);`,
+	`CREATE TABLE playbook_runs (
+		id          INTEGER PRIMARY KEY,
+		case_id     INTEGER NOT NULL REFERENCES cases(id),
+		playbook    TEXT NOT NULL,
+		label       TEXT NOT NULL,
+		target      TEXT NOT NULL,
+		boundary    TEXT NOT NULL DEFAULT '[]',
+		skipped     TEXT NOT NULL DEFAULT '[]',
+		total       INTEGER NOT NULL,
+		status      TEXT NOT NULL,
+		started_at  TEXT NOT NULL,
+		finished_at TEXT
+	);
+	ALTER TABLE steps ADD COLUMN run_id INTEGER REFERENCES playbook_runs(id);`,
 }
 
 // Step is one execution of a Check inside a Case. Once finished it never changes.
@@ -54,8 +68,9 @@ type Step struct {
 	ID         int64             `json:"id"`
 	Check      string            `json:"check"`
 	Target     string            `json:"target"`
-	Options    map[string]string `json:"options"` // part of the Step's identity
-	Status     string            `json:"status"`  // running | ok | failed
+	Options    map[string]string `json:"options"`          // part of the Step's identity
+	Status     string            `json:"status"`           // running | ok | failed | cancelled
+	RunID      int64             `json:"run_id,omitempty"` // the Playbook run that started it
 	Result     json.RawMessage   `json:"result,omitempty"`
 	Error      string            `json:"error,omitempty"`
 	StartedAt  time.Time         `json:"started_at"`
@@ -83,6 +98,22 @@ type Case struct {
 	Steps        []Step       `json:"steps,omitempty"`
 	Findings     []Finding    `json:"findings,omitempty"`
 	Suggestions  []Suggestion `json:"suggestions,omitempty"`
+	Runs         []Run        `json:"runs,omitempty"`
+}
+
+// Run is one execution of a Playbook in a Case. Its label and Boundary notes
+// are copied at the start, so later edits to the Playbook don't rewrite history.
+type Run struct {
+	ID         int64      `json:"id"`
+	Playbook   string     `json:"playbook"`
+	Label      string     `json:"label"`
+	Target     string     `json:"target"`
+	Boundary   []string   `json:"boundary"`
+	Skipped    []skip     `json:"skipped"`
+	Total      int        `json:"total"`  // entries in the Playbook
+	Status     string     `json:"status"` // running | done | cancelled
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 
 type store struct{ db *sql.DB }
@@ -218,10 +249,10 @@ func optionsKey(opts map[string]string) string {
 	return string(b)
 }
 
-func (s *store) startStep(caseID int64, check, target string, opts map[string]string) (Step, error) {
-	st := Step{Check: check, Target: target, Options: opts, Status: "running", StartedAt: time.Now().UTC()}
-	res, err := s.db.Exec(`INSERT INTO steps (case_id, check_key, target, options, status, started_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		caseID, check, target, optionsKey(opts), st.Status, st.StartedAt.Format(time.RFC3339Nano))
+func (s *store) startStep(caseID int64, check, target string, opts map[string]string, runID int64) (Step, error) {
+	st := Step{Check: check, Target: target, Options: opts, RunID: runID, Status: "running", StartedAt: time.Now().UTC()}
+	res, err := s.db.Exec(`INSERT INTO steps (case_id, check_key, target, options, run_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		caseID, check, target, optionsKey(opts), nullID(runID), st.Status, st.StartedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return st, err
 	}
@@ -229,13 +260,18 @@ func (s *store) startStep(caseID int64, check, target string, opts map[string]st
 	return st, nil
 }
 
-func (s *store) finishStep(st *Step, result any, runErr error) error {
+// finishStep records a Step's outcome; cancelled means the rep (or shutdown)
+// stopped it, which is neither a result nor a failure.
+func (s *store) finishStep(st *Step, result any, runErr error, cancelled bool) error {
 	t := time.Now().UTC()
 	st.FinishedAt = &t
 	st.Status = "ok"
-	if runErr != nil {
+	switch {
+	case cancelled:
+		st.Status, st.Error = "cancelled", ""
+	case runErr != nil:
 		st.Status, st.Error = "failed", runErr.Error()
-	} else {
+	default:
 		st.Result, _ = json.Marshal(result)
 	}
 	_, err := s.db.Exec(`UPDATE steps SET status = ?, result = ?, error = ?, finished_at = ? WHERE id = ?`,
@@ -311,7 +347,7 @@ func (s *store) getCase(id int64) (Case, error) {
 		return c, err
 	}
 
-	rows, err := s.db.Query(`SELECT id, check_key, target, options, status, result, error, started_at, finished_at FROM steps WHERE case_id = ? ORDER BY id`, id)
+	rows, err := s.db.Query(`SELECT id, check_key, target, options, coalesce(run_id, 0), status, result, error, started_at, finished_at FROM steps WHERE case_id = ? ORDER BY id`, id)
 	if err != nil {
 		return c, err
 	}
@@ -321,7 +357,7 @@ func (s *store) getCase(id int64) (Case, error) {
 		var st Step
 		var result, finished sql.NullString
 		var started, opts string
-		if err := rows.Scan(&st.ID, &st.Check, &st.Target, &opts, &st.Status, &result, &st.Error, &started, &finished); err != nil {
+		if err := rows.Scan(&st.ID, &st.Check, &st.Target, &opts, &st.RunID, &st.Status, &result, &st.Error, &started, &finished); err != nil {
 			return c, err
 		}
 		json.Unmarshal([]byte(opts), &st.Options)
@@ -345,7 +381,8 @@ func (s *store) getCase(id int64) (Case, error) {
 		return c, err
 	}
 	c.Suggestions = caseSuggestions(c.Steps, c.Targets, dismissed)
-	return c, nil
+	c.Runs, err = s.runs(id)
+	return c, err
 }
 
 // stepIdentity is what makes two Steps runs of "the same thing".
@@ -428,10 +465,70 @@ func (s *store) dismissed(caseID int64) ([]string, error) {
 	return out, rows.Err()
 }
 
+func nullID(id int64) any {
+	if id == 0 {
+		return nil
+	}
+	return id
+}
+
+func (s *store) createRun(caseID int64, p *Playbook, target string) (int64, error) {
+	boundary, _ := json.Marshal(p.Boundary)
+	res, err := s.db.Exec(`INSERT INTO playbook_runs (case_id, playbook, label, target, boundary, total, status, started_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?)`,
+		caseID, p.Name, p.Label, target, string(boundary), len(p.Entries), now())
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *store) finishRun(runID int64, status string, skipped []skip) error {
+	b, _ := json.Marshal(skipped)
+	_, err := s.db.Exec(`UPDATE playbook_runs SET status = ?, skipped = ?, finished_at = ? WHERE id = ?`, status, string(b), now(), runID)
+	return err
+}
+
+// runCase returns the Case a run belongs to, or sql.ErrNoRows.
+func (s *store) runCase(runID int64) (int64, error) {
+	var caseID int64
+	err := s.db.QueryRow(`SELECT case_id FROM playbook_runs WHERE id = ?`, runID).Scan(&caseID)
+	return caseID, err
+}
+
+func (s *store) runs(caseID int64) ([]Run, error) {
+	rows, err := s.db.Query(`SELECT id, playbook, label, target, boundary, skipped, total, status, started_at, finished_at FROM playbook_runs WHERE case_id = ? ORDER BY id`, caseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Run
+	for rows.Next() {
+		var r Run
+		var boundary, skipped, started string
+		var finished sql.NullString
+		if err := rows.Scan(&r.ID, &r.Playbook, &r.Label, &r.Target, &boundary, &skipped, &r.Total, &r.Status, &started, &finished); err != nil {
+			return nil, err
+		}
+		json.Unmarshal([]byte(boundary), &r.Boundary)
+		json.Unmarshal([]byte(skipped), &r.Skipped)
+		r.StartedAt, _ = time.Parse(time.RFC3339Nano, started)
+		if finished.Valid {
+			t, _ := time.Parse(time.RFC3339Nano, finished.String)
+			r.FinishedAt = &t
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // failRunning marks Steps left "running" by a previous process as failed;
 // nothing will ever finish them.
 func (s *store) failRunning() error {
-	_, err := s.db.Exec(`UPDATE steps SET status = 'failed', error = 'interrupted: Stackwell stopped while this Step was running', finished_at = ? WHERE status = 'running'`, now())
+	if _, err := s.db.Exec(`UPDATE steps SET status = 'failed', error = 'interrupted: Stackwell stopped while this Step was running', finished_at = ? WHERE status = 'running'`, now()); err != nil {
+		return err
+	}
+	// A run's scheduler lived in memory; nothing will resume it.
+	_, err := s.db.Exec(`UPDATE playbook_runs SET status = 'cancelled', finished_at = ? WHERE status = 'running'`, now())
 	return err
 }
 
