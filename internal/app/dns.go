@@ -64,8 +64,11 @@ func dnsLookup(ctx context.Context, n Net, target string) (any, error) {
 	}
 	wg.Wait()
 	if answers == 0 {
-		if ctx.Err() != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return nil, errors.New("timed out waiting for DNS resolver " + n.Resolver)
+		}
+		if ctx.Err() != nil {
+			return nil, errors.New("cancelled")
 		}
 		return nil, errors.New("no answer from DNS resolver " + n.Resolver + ": " + res.Errors["A"])
 	}
