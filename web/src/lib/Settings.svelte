@@ -41,19 +41,26 @@
     }
   }
 
-  // The field shows the folder actually in use, as the server reports it.
-  async function loadPlaybooks() {
+  // The field shows the folder actually in use, unless the rep has started
+  // typing: a late answer must not overwrite what they typed.
+  let folderEdited = false
+
+  async function loadPlaybooks(fillField: boolean) {
     playbooks = await api<PlaybookList>('GET', '/api/playbooks').catch(() => null)
-    if (playbooks) folder = playbooks.folder
+    if (playbooks && (fillField || !folderEdited)) folder = playbooks.folder
   }
 
   async function load() {
+    folderEdited = false
     await attempt(() => api<Settings>('GET', '/api/settings'))
-    loadPlaybooks()
+    loadPlaybooks(false)
   }
 
   async function saveFolder(dir: string) {
-    if (await attempt(() => api<Settings>('PUT', '/api/settings', { playbook_dir: dir.trim() }))) loadPlaybooks()
+    if (await attempt(() => api<Settings>('PUT', '/api/settings', { playbook_dir: dir.trim() }))) {
+      folderEdited = false
+      loadPlaybooks(true)
+    }
   }
 
   // Values leave their field as soon as they're sent; only a hint comes back.
@@ -173,6 +180,7 @@
     <form onsubmit={(e) => (e.preventDefault(), saveFolder(folder))} class="flex gap-1.5" aria-label="Playbook folder">
       <input
         bind:value={folder}
+        oninput={() => (folderEdited = true)}
         aria-label="Playbook folder path"
         placeholder="/home/you/team-playbooks"
         autocomplete="off"
