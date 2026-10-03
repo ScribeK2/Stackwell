@@ -18,5 +18,5 @@ test('any applicable Check runs from the palette, with its own result view', asy
   const step = page.getByRole('article', { name: /DNS Propagation example.com/ })
   await expect(step).toContainText('records: mail')
   // Real public resolvers: allow for slow ones (the Check timeout is 15s).
-  await expect(step).toContainText('Resolver', { timeout: 20_000 })
+  await expect(step).toContainText('resolvers answered', { timeout: 20_000 })
 })
