@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('a Playbook runs from the palette and reports its progress and limits', async ({ page }) => {
   await page.goto('/')

@@ -118,6 +118,12 @@ type Run struct {
 
 type store struct{ db *sql.DB }
 
+// querier is *sql.DB or *sql.Tx, so reads can share one transaction.
+type querier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 func openStore(dir string) (*store, error) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "stackwell.db")+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
@@ -292,8 +298,10 @@ func scanCase(row interface{ Scan(...any) error }) (Case, error) {
 	return c, nil
 }
 
-func (s *store) targets(caseID int64) ([]Target, error) {
-	rows, err := s.db.Query(`SELECT value, kind FROM targets WHERE case_id = ? ORDER BY rowid`, caseID)
+func (s *store) targets(caseID int64) ([]Target, error) { return readTargets(s.db, caseID) }
+
+func readTargets(q querier, caseID int64) ([]Target, error) {
+	rows, err := q.Query(`SELECT value, kind FROM targets WHERE case_id = ? ORDER BY rowid`, caseID)
 	if err != nil {
 		return nil, err
 	}
@@ -337,28 +345,49 @@ func (s *store) recentCases(limit int) ([]Case, error) {
 	return cs, nil
 }
 
-// getCase returns sql.ErrNoRows when the Case doesn't exist.
+// getCase returns sql.ErrNoRows when the Case doesn't exist. It reads in one
+// transaction, so a Case is a single consistent snapshot: never a run that
+// has finished next to a Step it still shows as running.
 func (s *store) getCase(id int64) (Case, error) {
-	c, err := scanCase(s.db.QueryRow(`SELECT `+caseColumns+` FROM cases WHERE id = ?`, id))
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Case{}, err
+	}
+	defer tx.Rollback()
+	c, err := scanCase(tx.QueryRow(`SELECT `+caseColumns+` FROM cases WHERE id = ?`, id))
 	if err != nil {
 		return c, err
 	}
-	if c.Targets, err = s.targets(id); err != nil {
+	if c.Targets, err = readTargets(tx, id); err != nil {
 		return c, err
 	}
+	if c.Steps, err = readSteps(tx, id); err != nil {
+		return c, err
+	}
+	compareSteps(c.Steps)
+	c.Findings = caseFindings(c.Steps, c.Targets)
+	dismissed, err := readDismissed(tx, id)
+	if err != nil {
+		return c, err
+	}
+	c.Suggestions = caseSuggestions(c.Steps, c.Targets, dismissed)
+	c.Runs, err = readRuns(tx, id)
+	return c, err
+}
 
-	rows, err := s.db.Query(`SELECT id, check_key, target, options, coalesce(run_id, 0), status, result, error, started_at, finished_at FROM steps WHERE case_id = ? ORDER BY id`, id)
+func readSteps(q querier, caseID int64) ([]Step, error) {
+	rows, err := q.Query(`SELECT id, check_key, target, options, coalesce(run_id, 0), status, result, error, started_at, finished_at FROM steps WHERE case_id = ? ORDER BY id`, caseID)
 	if err != nil {
-		return c, err
+		return nil, err
 	}
 	defer rows.Close()
-	c.Steps = []Step{}
+	steps := []Step{}
 	for rows.Next() {
 		var st Step
 		var result, finished sql.NullString
 		var started, opts string
 		if err := rows.Scan(&st.ID, &st.Check, &st.Target, &opts, &st.RunID, &st.Status, &result, &st.Error, &started, &finished); err != nil {
-			return c, err
+			return nil, err
 		}
 		json.Unmarshal([]byte(opts), &st.Options)
 		if result.Valid {
@@ -369,20 +398,9 @@ func (s *store) getCase(id int64) (Case, error) {
 			t, _ := time.Parse(time.RFC3339Nano, finished.String)
 			st.FinishedAt = &t
 		}
-		c.Steps = append(c.Steps, st)
+		steps = append(steps, st)
 	}
-	if err := rows.Err(); err != nil {
-		return c, err
-	}
-	compareSteps(c.Steps)
-	c.Findings = caseFindings(c.Steps, c.Targets)
-	dismissed, err := s.dismissed(id)
-	if err != nil {
-		return c, err
-	}
-	c.Suggestions = caseSuggestions(c.Steps, c.Targets, dismissed)
-	c.Runs, err = s.runs(id)
-	return c, err
+	return steps, rows.Err()
 }
 
 // stepIdentity is what makes two Steps runs of "the same thing".
@@ -448,8 +466,8 @@ func (s *store) dismiss(caseID int64, value string) error {
 	return err
 }
 
-func (s *store) dismissed(caseID int64) ([]string, error) {
-	rows, err := s.db.Query(`SELECT value FROM dismissed WHERE case_id = ?`, caseID)
+func readDismissed(q querier, caseID int64) ([]string, error) {
+	rows, err := q.Query(`SELECT value FROM dismissed WHERE case_id = ?`, caseID)
 	if err != nil {
 		return nil, err
 	}
@@ -495,8 +513,10 @@ func (s *store) runCase(runID int64) (int64, error) {
 	return caseID, err
 }
 
-func (s *store) runs(caseID int64) ([]Run, error) {
-	rows, err := s.db.Query(`SELECT id, playbook, label, target, boundary, skipped, total, status, started_at, finished_at FROM playbook_runs WHERE case_id = ? ORDER BY id`, caseID)
+func (s *store) runs(caseID int64) ([]Run, error) { return readRuns(s.db, caseID) }
+
+func readRuns(q querier, caseID int64) ([]Run, error) {
+	rows, err := q.Query(`SELECT id, playbook, label, target, boundary, skipped, total, status, started_at, finished_at FROM playbook_runs WHERE case_id = ? ORDER BY id`, caseID)
 	if err != nil {
 		return nil, err
 	}

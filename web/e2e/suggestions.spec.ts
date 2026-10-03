@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('suggested Targets are triaged from the keyboard and never added on their own', async ({ page }) => {
   await page.goto('/')

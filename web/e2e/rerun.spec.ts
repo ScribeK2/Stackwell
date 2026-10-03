@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('r re-runs the focused Step; j/k move between runs', async ({ page }) => {
   await page.goto('/')

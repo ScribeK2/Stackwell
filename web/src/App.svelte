@@ -247,8 +247,11 @@
   )
 
   // Recent Cases appear in the palette, searchable by title, Target or ticket reference.
+  // Kept fresh ahead of time (not only when the palette opens), so a rep who
+  // types straight into the palette finds the Case already listed.
   $effect(() => {
-    if (keymap.paletteOpen) api<Case[]>('GET', '/api/cases').then((cs) => (recent = cs), () => {})
+    void [keymap.paletteOpen, current?.id, current?.title, current?.ticket_ref, current?.status]
+    api<Case[]>('GET', '/api/cases').then((cs) => (recent = cs), () => {})
   })
   $effect(() => {
     const actions: Action[] = recent

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('any applicable Check runs from the palette, with its own result view', async ({ page }) => {
   await page.goto('/')

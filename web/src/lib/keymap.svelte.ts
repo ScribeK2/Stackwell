@@ -1,3 +1,5 @@
+import { untrack } from 'svelte'
+
 // One registry for every action: the palette lists them, the help overlay
 // documents them, and the global handler runs their shortcuts. No modes.
 
@@ -20,12 +22,12 @@ export const keymap = new Keymap()
 
 /** Registers actions; returns a function that removes them (use in $effect/onMount). */
 export function register(...actions: Action[]): () => void {
-  keymap.actions.push(...actions)
+  // untrack: registering from an $effect must not make that effect depend on
+  // the registry it writes to, or effects re-trigger each other without end.
+  untrack(() => keymap.actions.push(...actions))
   // By id: $state wraps stored actions in proxies, so identity never matches.
   const ids = new Set(actions.map((a) => a.id))
-  return () => {
-    keymap.actions = keymap.actions.filter((a) => !ids.has(a.id))
-  }
+  return () => untrack(() => (keymap.actions = keymap.actions.filter((a) => !ids.has(a.id))))
 }
 
 // Plain keys stay case-sensitive (Shift+J isn't j); combos spell out shift.

@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
+import { type Page } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 const palette = (page: Page) => page.getByRole('dialog', { name: 'Command palette' })
 const help = (page: Page) => page.getByRole('dialog', { name: 'Keyboard shortcuts' })
