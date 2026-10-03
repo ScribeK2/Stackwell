@@ -56,15 +56,20 @@
     }
   }
 
-  const newCase = () =>
-    attempt(async () => {
-      await api('PUT', '/api/active', { case_id: null })
-      show(null)
-      targetEl.focus()
-    })
+  // Submissions run one after another, so a second Target typed before the
+  // first Case exists joins that Case instead of starting another.
+  let queue = Promise.resolve()
+
+  // Clears the screen at once and queues behind any submission, so a Target
+  // typed straight after n lands in the new Case, not the old one.
+  function newCase() {
+    show(null)
+    targetEl.focus()
+    queue = queue.then(() => attempt(() => api('PUT', '/api/active', { case_id: null })))
+  }
 
   const switchTo = (id: number) =>
-    attempt(async () => show((await api<{ case: Case }>('PUT', '/api/active', { case_id: id })).case))
+    (queue = queue.then(() => attempt(async () => show((await api<{ case: Case }>('PUT', '/api/active', { case_id: id })).case))))
 
   const edit = (fields: Partial<Pick<Case, 'title' | 'ticket_ref' | 'status'>>) =>
     attempt(async () => {
@@ -98,9 +103,6 @@
     if (step && step.status !== 'running') rerun(step)
   }
 
-  // Submissions run one after another, so a second Target typed before the
-  // first Case exists joins that Case instead of starting another.
-  let queue = Promise.resolve()
 
   function submit(e: SubmitEvent) {
     e.preventDefault()
