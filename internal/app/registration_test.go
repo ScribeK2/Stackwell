@@ -133,13 +133,6 @@ func runRegistration(t *testing.T, n app.Net, target string) (step diffedStep, r
 	return s.diffedStep, res, fs
 }
 
-func severityOf(fs []finding, code string) string {
-	if i := slices.IndexFunc(fs, func(f finding) bool { return f.Code == code }); i != -1 {
-		return fs[i].Severity
-	}
-	return ""
-}
-
 func TestRegistrationReadsTheRegistryOverRDAP(t *testing.T) {
 	expires := time.Now().AddDate(1, 0, 0)
 	rdap, _ := fakeRDAP(t, 0, rdapDomain(expires))
