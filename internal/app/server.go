@@ -30,14 +30,16 @@ type Config struct {
 }
 
 type check struct {
-	key   string
-	kinds []string // Target kinds it applies to
-	auto  bool     // runs when a Target of a matching kind is added
-	run   func(ctx context.Context, n Net, target string) (any, error)
+	key      string
+	label    string
+	kinds    []string // Target kinds it applies to
+	auto     bool     // runs when a Target of a matching kind is added
+	run      func(ctx context.Context, n Net, target string) (any, error)
+	findings func(target, kind string, result json.RawMessage) []Finding // nil: no rules yet
 }
 
 var checks = []check{
-	{key: "dns_lookup", kinds: []string{kindDomain, kindHostname}, auto: true, run: dnsLookup},
+	{key: "dns_lookup", label: "DNS Lookup", kinds: []string{kindDomain, kindHostname}, auto: true, run: dnsLookup, findings: dnsFindings},
 }
 
 // checksFor lists the keys of the Checks that apply to a Target kind.

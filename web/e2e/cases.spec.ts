@@ -56,3 +56,17 @@ test('an invalid Target shows why', async ({ page }) => {
   await expect(page.getByRole('alert')).toContainText('not a valid')
   await expect(target).toHaveValue('not a host')
 })
+
+test('Targets typed in quick succession land in one Case', async ({ page }) => {
+  await page.goto('/')
+  await page.locator('body').click()
+  await page.keyboard.press('n')
+  const target = page.getByRole('textbox', { name: 'Target' })
+  await target.fill('fast1.invalid')
+  await target.press('Enter')
+  await target.fill('fast2.invalid') // no waiting: the first request is still in flight
+  await target.press('Enter')
+  const chips = page.getByRole('list', { name: 'Targets' })
+  await expect(chips).toContainText('fast1.invalid')
+  await expect(chips).toContainText('fast2.invalid')
+})

@@ -74,6 +74,7 @@ type Case struct {
 	LastActiveAt time.Time `json:"last_active_at"`
 	Targets      []Target  `json:"targets"`
 	Steps        []Step    `json:"steps,omitempty"`
+	Findings     []Finding `json:"findings,omitempty"`
 }
 
 type store struct{ db *sql.DB }
@@ -320,6 +321,7 @@ func (s *store) getCase(id int64) (Case, error) {
 		return c, err
 	}
 	compareSteps(c.Steps)
+	c.Findings = caseFindings(c.Steps, c.Targets)
 	return c, nil
 }
 

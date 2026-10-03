@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { api, ApiError, caseName, type Case, type Step } from './lib/api'
+  import Findings from './lib/Findings.svelte'
   import Help from './lib/Help.svelte'
   import Kbd from './lib/Kbd.svelte'
   import Palette from './lib/Palette.svelte'
@@ -19,8 +20,25 @@
   // The server's copy wins once finished: comparisons can settle after the
   // event (an older overlapping run finishing late). A cached event only
   // fills in a Step the server still reports as running.
+  // Steps already re-read once because the response predated their finish;
+  // never more than once each, so a server that lags can't cause a fetch loop.
+  const reread = new Set<number>()
+
   function show(c: Case | null) {
-    current = c && { ...c, steps: (c.steps ?? []).map((s) => (s.status === 'running' && seen.get(s.id)) || s) }
+    let stale = false
+    current = c && {
+      ...c,
+      steps: (c.steps ?? []).map((s) => {
+        const known = s.status === 'running' && seen.get(s.id)
+        if (known && known.status !== 'running' && !reread.has(s.id)) {
+          reread.add(s.id)
+          stale = true
+        }
+        return known || s
+      }),
+    }
+    // A Step finished before this response was built: its Findings aren't in it yet.
+    if (c && stale) refresh(c.id)
   }
 
   async function refresh(id: number) {
@@ -76,17 +94,29 @@
     if (step && step.status !== 'running') rerun(step)
   }
 
-  async function submit(e: SubmitEvent) {
+  // Submissions run one after another, so a second Target typed before the
+  // first Case exists joins that Case instead of starting another.
+  let queue = Promise.resolve()
+
+  function submit(e: SubmitEvent) {
     e.preventDefault()
-    if (!input.trim()) return
-    await attempt(async () => {
-      show(
-        current
-          ? await api<Case>('POST', `/api/cases/${current.id}/targets`, { target: input })
-          : await api<Case>('POST', '/api/cases', { target: input }),
-      )
-      input = ''
-    })
+    const value = input.trim()
+    if (!value) return
+    input = ''
+    queue = queue.then(() =>
+      attempt(async () => {
+        try {
+          show(
+            current
+              ? await api<Case>('POST', `/api/cases/${current.id}/targets`, { target: value })
+              : await api<Case>('POST', '/api/cases', { target: value }),
+          )
+        } catch (err) {
+          if (!input) input = value // give it back so the rep can fix it
+          throw err
+        }
+      }),
+    )
   }
 
   onMount(() =>
@@ -262,6 +292,10 @@
       <span class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 group-focus-within:hidden"><Kbd key="/" /></span>
     </form>
     {#if error}<p role="alert" class="mt-2 text-crit">{error}</p>{/if}
+
+    {#if current?.findings?.length}
+      <Findings findings={current.findings} steps={current.steps ?? []} />
+    {/if}
 
     {#if current}
       <section class="mt-6" aria-label="Steps">

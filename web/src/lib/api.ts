@@ -10,6 +10,16 @@ export type Step = {
   changes?: Change[]
 }
 
+export type Finding = {
+  code: string
+  severity: 'critical' | 'warning' | 'info' | 'ok'
+  title: string
+  message: string
+  recommendation?: string
+  target: string
+  citations: number[]
+}
+
 export type Change = { field: string; removed?: string[]; added?: string[] }
 
 /** records.MX → MX, errors.CAA → CAA error, rcode → Response code */
@@ -28,6 +38,7 @@ export type Case = {
   status: 'open' | 'resolved'
   targets: Target[]
   steps?: Step[]
+  findings?: Finding[]
 }
 
 export class ApiError extends Error {}
