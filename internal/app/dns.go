@@ -34,17 +34,12 @@ func dnsLookup(ctx context.Context, n Net, target string, _ map[string]string) (
 		wg      sync.WaitGroup
 		answers int
 	)
-	udp, tcp := &dns.Client{}, &dns.Client{Net: "tcp"}
 	for _, qt := range dnsLookupTypes {
 		wg.Go(func() {
 			m := new(dns.Msg)
 			m.SetQuestion(name, qt)
 			m.RecursionDesired = true
-			m.SetEdns0(1232, false)
-			r, _, err := udp.ExchangeContext(ctx, m, n.Resolver)
-			if err == nil && r.Truncated {
-				r, _, err = tcp.ExchangeContext(ctx, m, n.Resolver)
-			}
+			r, err := exchange(ctx, n.Resolver, m)
 			typ := dns.TypeToString[qt]
 			mu.Lock()
 			defer mu.Unlock()
@@ -155,4 +150,20 @@ func dnsFindings(target, kind string, _ map[string]string, raw json.RawMessage) 
 			Message: "These record types could not be queried, so their absence above is not conclusive: " + strings.Join(types, ", ") + "."})
 	}
 	return fs
+}
+
+// exchange sends a DNS query: UDP first, then TCP when the UDP answer is
+// truncated or unusable. Some public resolvers cut an oversized UDP reply
+// mid-record instead of setting TC, which fails to parse; TCP gets it whole.
+// Every Check's DNS goes through here.
+func exchange(ctx context.Context, server string, m *dns.Msg) (*dns.Msg, error) {
+	if m.IsEdns0() == nil {
+		m.SetEdns0(1232, false)
+	}
+	r, _, err := (&dns.Client{UDPSize: 1232}).ExchangeContext(ctx, m, server)
+	if (err == nil && !r.Truncated) || ctx.Err() != nil {
+		return r, err
+	}
+	r, _, err = (&dns.Client{Net: "tcp"}).ExchangeContext(ctx, m, server)
+	return r, err
 }

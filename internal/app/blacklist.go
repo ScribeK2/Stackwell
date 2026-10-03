@@ -243,11 +243,7 @@ func blExchange(ctx context.Context, n Net, name string, qt uint16) (*dns.Msg, e
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(name), qt)
 	m.RecursionDesired = true
-	m.SetEdns0(1232, false)
-	r, _, err := (&dns.Client{}).ExchangeContext(ctx, m, n.Resolver)
-	if err == nil && r.Truncated {
-		r, _, err = (&dns.Client{Net: "tcp"}).ExchangeContext(ctx, m, n.Resolver)
-	}
+	r, err := exchange(ctx, n.Resolver, m)
 	if err != nil && ctx.Err() != nil {
 		return nil, ctx.Err()
 	}

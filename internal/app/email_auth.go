@@ -158,17 +158,13 @@ func emailAuth(ctx context.Context, n Net, target string, opts map[string]string
 	return res, nil
 }
 
-// emailExchange sends one query, retrying over TCP when truncated. Any rcode
+// emailExchange sends one query (see exchange). Any rcode
 // other than NOERROR or NXDOMAIN is an error.
 func emailExchange(ctx context.Context, n Net, name string, qt uint16) (*dns.Msg, error) {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(name), qt)
 	m.RecursionDesired = true
-	m.SetEdns0(1232, false)
-	r, _, err := (&dns.Client{}).ExchangeContext(ctx, m, n.Resolver)
-	if err == nil && r.Truncated {
-		r, _, err = (&dns.Client{Net: "tcp"}).ExchangeContext(ctx, m, n.Resolver)
-	}
+	r, err := exchange(ctx, n.Resolver, m)
 	if err != nil {
 		return nil, err
 	}

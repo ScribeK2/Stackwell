@@ -5,48 +5,74 @@
   type Answer = {
     name: string
     location: string
-    address: string
     rcode?: string
     answers: Record<string, string[]>
     failed?: string[]
     error?: string
   }
   const r = $derived(step.result as { types: string[]; resolvers: Answer[]; disagree: string[] })
+
+  // Per record type, resolvers grouped by the answer they gave, so agreement
+  // reads as one line and a split shows exactly who sees what.
+  type Group = { answer: string[]; who: Answer[] }
+  const rows = $derived(
+    r.types.map((type) => {
+      const groups: Group[] = []
+      for (const res of r.resolvers) {
+        if (res.error || res.rcode === 'NXDOMAIN' || res.failed?.includes(type)) continue
+        const answer = res.answers[type] ?? []
+        const g = groups.find((g) => g.answer.join('\n') === answer.join('\n'))
+        if (g) g.who.push(res)
+        else groups.push({ answer, who: [res] })
+      }
+      groups.sort((a, b) => b.who.length - a.who.length)
+      return { type, groups, split: r.disagree.includes(type) }
+    }),
+  )
+  const silent = $derived(r.resolvers.filter((x) => x.error))
+  const missing = $derived(r.resolvers.filter((x) => !x.error && x.rcode === 'NXDOMAIN'))
+  const answered = $derived(r.resolvers.length - silent.length)
 </script>
 
-<div class="overflow-x-auto">
-  <table class="my-1.5 w-full text-xs">
-    <thead>
-      <tr class="text-left text-subtle">
-        <th class="py-1 pl-3.5 font-medium">Resolver</th>
-        {#each r.types as t}
-          <th class="px-2 py-1 font-medium {r.disagree.includes(t) ? 'text-warn' : ''}">{t}{r.disagree.includes(t) ? ' ≠' : ''}</th>
-        {/each}
-      </tr>
-    </thead>
-    <tbody class="font-mono">
-      {#each r.resolvers as res}
-        <tr class="border-t border-line align-top">
-          <th scope="row" class="py-1.5 pl-3.5 text-left font-sans font-normal">
-            {res.name} <span class="block text-[11px] text-subtle">{res.location}</span>
-          </th>
-          {#if res.error}
-            <td colspan={r.types.length} class="px-2 py-1.5 font-sans text-subtle">{res.error}</td>
-          {:else if res.rcode === 'NXDOMAIN'}
-            <td colspan={r.types.length} class="px-2 py-1.5 font-sans {r.disagree.includes('existence') ? 'bg-warn/8 text-warn' : 'text-subtle'}">Does not exist (NXDOMAIN)</td>
-          {:else}
-            {#each r.types as t}
-              <td class="px-2 py-1.5 break-all {r.disagree.includes(t) ? 'bg-warn/8' : ''}">
-                {#if res.failed?.includes(t)}
-                  <span class="font-sans text-subtle">query failed</span>
+<div class="px-3.5 py-2.5 text-xs">
+  <p class="mb-2 text-muted">
+    {answered} of {r.resolvers.length} resolvers answered
+    {#if r.disagree.length}· <span class="text-warn">disagreement on {r.disagree.join(', ')}</span>{:else}· all agree{/if}
+  </p>
+
+  {#if missing.length && missing.length < answered}
+    <p class="mb-2 text-warn">
+      Says the name does not exist: {missing.map((m) => m.name).join(', ')}
+    </p>
+  {/if}
+
+  <dl class="divide-y divide-line">
+    {#each rows as row (row.type)}
+      <div class="flex gap-3 py-1.5">
+        <dt class="w-14 shrink-0 font-medium {row.split ? 'text-warn' : 'text-subtle'}">{row.type}</dt>
+        <dd class="min-w-0 flex-1 space-y-1.5">
+          {#each row.groups as g}
+            <div class={row.split ? 'rounded border border-line px-2 py-1' : ''}>
+              <div class="font-mono break-all">
+                {#each g.answer as v}<div>{v}</div>{:else}<span class="text-subtle">no records</span>{/each}
+              </div>
+              <div class="mt-0.5 text-subtle">
+                {#if !row.split}
+                  all {g.who.length} agree
                 {:else}
-                  {#each res.answers[t] ?? [] as v}<div>{v}</div>{:else}<span class="text-subtle">—</span>{/each}
+                  {g.who.map((w) => `${w.name} (${w.location})`).join(', ')}
                 {/if}
-              </td>
-            {/each}
-          {/if}
-        </tr>
-      {/each}
-    </tbody>
-  </table>
+              </div>
+            </div>
+          {:else}
+            <span class="text-subtle">no answers</span>
+          {/each}
+        </dd>
+      </div>
+    {/each}
+  </dl>
+
+  {#if silent.length}
+    <p class="mt-2 text-subtle">No answer from {silent.map((s) => s.name).join(', ')}</p>
+  {/if}
 </div>

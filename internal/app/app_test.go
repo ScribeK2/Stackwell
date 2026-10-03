@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -196,5 +198,76 @@ func TestHealthReportsVersion(t *testing.T) {
 	var body struct{ Status, Version string }
 	if code := h.do("GET", "/api/health", nil, &body); code != http.StatusOK || body.Status != "ok" || body.Version != "1.2.3" {
 		t.Fatalf("health = %d %+v", code, body)
+	}
+}
+
+// Some public resolvers cut an oversized UDP reply mid-record instead of
+// sending a clean truncated message; the lookup must still get the full
+// answer over TCP rather than fail.
+func TestCutUDPRepliesAreRetriedOverTCP(t *testing.T) {
+	var zone strings.Builder
+	for i := range 20 {
+		fmt.Fprintf(&zone, "big.test. 300 IN TXT \"token-%02d-%s\"\n", i, strings.Repeat("x", 80))
+	}
+	full := fakeDNS(t, zone.String(), false) // its TCP side answers in full
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			q := new(dns.Msg)
+			if q.Unpack(buf[:n]) != nil {
+				continue
+			}
+			r, _, err := (&dns.Client{Net: "tcp"}).Exchange(q, full)
+			if err != nil {
+				continue
+			}
+			packed, _ := r.Pack()
+			if len(packed) > 600 {
+				packed = packed[:600] // cut mid-record, TC not set
+			}
+			pc.WriteTo(packed, from)
+		}
+	}()
+	// Same port number for TCP, so the retry reaches the full answer.
+	_, fullPort, _ := net.SplitHostPort(full)
+	proxy, err := net.Listen("tcp", pc.LocalAddr().String())
+	if err != nil {
+		t.Skip("TCP port for the cut-reply server is taken:", err)
+	}
+	t.Cleanup(func() { proxy.Close() })
+	go func() {
+		for {
+			c, err := proxy.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				up, err := net.Dial("tcp", "127.0.0.1:"+fullPort)
+				if err != nil {
+					return
+				}
+				defer up.Close()
+				go io.Copy(up, c)
+				io.Copy(c, up)
+			}()
+		}
+	}()
+
+	h := start(t, app.Config{Net: app.Net{Resolver: pc.LocalAddr().String()}})
+	var c caseView
+	h.do("POST", "/api/cases", map[string]string{"target": "big.test"}, &c)
+	s := h.waitStep(c.ID)
+	if s.Status != "ok" || len(s.Result.Records["TXT"]) != 20 {
+		t.Fatalf("step = %s %q, %d TXT records", s.Status, s.Error, len(s.Result.Records["TXT"]))
 	}
 }
