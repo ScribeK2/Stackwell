@@ -31,6 +31,84 @@ func init() {
 		run:      emailAuth,
 		findings: emailAuthFindings,
 	})
+	registerRule(spfMissingProvider)
+}
+
+// mailProviders are hosted mail services recognisable from a domain's MX
+// hosts, with the SPF include each documents for its outbound servers.
+var mailProviders = []struct {
+	name     string
+	mxSuffix []string // an MX host equal to, or ending in "."+, one of these
+	include  string
+}{
+	{"Microsoft 365", []string{"mail.protection.outlook.com"}, "spf.protection.outlook.com"},
+	{"Google Workspace", []string{"google.com", "googlemail.com"}, "_spf.google.com"},
+}
+
+// spfMissingProvider: the domain's mail is hosted by a known provider (from
+// its MX), but its SPF record doesn't include that provider anywhere, so mail
+// the domain sends through it is likely to fail SPF. It stays silent unless
+// there is exactly one SPF record to judge; other problems with the record
+// are Email Authentication's own Findings.
+func spfMissingProvider(p picture) []Finding {
+	var out []Finding
+	for _, t := range p.Targets {
+		if t.Kind != kindDomain {
+			continue
+		}
+		dnsStep, authStep := p.step("dns_lookup", t.Value), p.step("email_auth", t.Value)
+		if dnsStep == nil || authStep == nil {
+			continue
+		}
+		var lookup dnsLookupResult
+		var auth emailAuthResult
+		if json.Unmarshal(dnsStep.Result, &lookup) != nil || json.Unmarshal(authStep.Result, &auth) != nil {
+			continue
+		}
+		spf := auth.SPF
+		if spf == nil || spf.Error != "" || len(spf.Records) != 1 || spf.Tree == nil {
+			continue
+		}
+		for _, pv := range mailProviders {
+			mx := ""
+			for _, rr := range lookup.Records["MX"] {
+				f := strings.Fields(rr) // "10 host."
+				host := strings.ToLower(strings.TrimSuffix(f[len(f)-1], "."))
+				for _, sfx := range pv.mxSuffix {
+					if host == sfx || strings.HasSuffix(host, "."+sfx) {
+						mx = host
+					}
+				}
+			}
+			if mx == "" || spfIncludes(spf.Tree, pv.include) {
+				continue
+			}
+			out = append(out, Finding{Code: "spf_missing_provider", Severity: "warning",
+				Title:          "SPF doesn't include " + pv.name,
+				Message:        "Mail for " + t.Value + " is handled by " + pv.name + " (MX " + mx + "), but its SPF record doesn't include " + pv.name + "'s servers, so mail sent through " + pv.name + " is likely to fail SPF.",
+				Recommendation: "Add include:" + pv.include + " to the SPF record, before its all term.",
+				Target:         t.Value,
+				Citations:      []int64{dnsStep.ID, authStep.ID}})
+		}
+	}
+	return out
+}
+
+// spfIncludes reports whether the SPF tree reaches domain through an include
+// or redirect, at any depth.
+func spfIncludes(n *spfNode, domain string) bool {
+	if n == nil {
+		return false
+	}
+	for _, t := range n.Terms {
+		if t.Name != "include" && t.Name != "redirect" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSuffix(t.Value, "."), domain) || spfIncludes(t.Target, domain) {
+			return true
+		}
+	}
+	return false
 }
 
 // Bundled reference data: DKIM selectors the common mail providers use.

@@ -26,6 +26,10 @@ _Avoid_: Input, subject
 A Target Stackwell spotted in a Step's result or in Evidence and offers to add to the Case; it is not part of the Case until the rep accepts it.
 _Avoid_: Discovered target, related target
 
+**Suggested Check**:
+A Check Stackwell offers to run, on a named Target, because a Finding rule needs its result (e.g. Blacklist on a sending IP found in pasted headers). Like a Suggested target, it can be accepted or dismissed.
+_Avoid_: Recommended check, next step, hint
+
 **Ticket reference**:
 The optional external helpdesk ticket ID a Case is attached to.
 _Avoid_: Ticket ID, case number
@@ -37,16 +41,20 @@ One kind of diagnostic Stackwell can perform, such as DNS lookup, SSL inspection
 _Avoid_: Tool, probe, test
 
 **Step**:
-One execution of a Check inside a Case, with its result. Never changes once recorded: re-running a Check adds a new Step, and Stackwell shows what changed since the previous one.
+One execution of a Check inside a Case, with its result. Never changes once recorded: re-running a Check adds a new Step, and Stackwell shows what changed since the previous one. The one exception is a Watch, whose re-runs become Steps only when the answer changes.
 _Avoid_: Run, tool run, probe
 
 **Evidence**:
-Material the rep pasted into a Case (email headers, mail logs) rather than something Stackwell fetched.
+Material the rep pasted into a Case (email headers, mail logs, bounce messages) rather than something Stackwell fetched.
 _Avoid_: Paste, input, attachment
 
 **Finding**:
-A conclusion with a severity, derived from one or more Steps or pieces of Evidence, citing which ones. Only the latest Step of each Check per Target produces Findings; earlier Steps feed the before/after history.
+A conclusion with a severity, derived from one or more Steps or pieces of Evidence, citing which ones. Only the latest Step of each Check per Target produces Findings; earlier Steps feed the before/after history. A Finding that combines several Steps (possibly on different Targets) still belongs to one Target, the one it is a conclusion about.
 _Avoid_: Issue, result, alert
+
+**Watch**:
+Re-running one Check on one Target at an interval until its result changes. Re-runs that give the same answer record nothing; a changed answer records a new Step and tells the rep.
+_Avoid_: Monitor, poll, schedule
 
 **Playbook**:
 A named, data-defined sequence of Checks (with dependencies between them) plus boundary notes, run against a Case's Target. Stackwell ships default Playbooks; reps can add or override them. Running a Playbook adds the Targets it derives (e.g. the primary MX host) to the Case.
@@ -65,6 +73,10 @@ _Avoid_: Visibility boundary, black box
 **Write-up**:
 The ticket-ready text generated from a Case's Findings, Steps and Boundary notes plus the rep's notes, copied out to the helpdesk.
 _Avoid_: Report, summary, export
+
+**Customer reply**:
+A plain-language version of the Write-up addressed to the customer: what is wrong and what to do, without Check names, severities or Boundary notes.
+_Avoid_: Customer write-up, email, response
 
 **Rep notes**:
 Free text the rep adds to a Case; saved with it and included in the Write-up.

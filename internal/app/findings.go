@@ -46,8 +46,45 @@ func caseFindings(steps []Step, targets []Target, evidence []Evidence) []Finding
 		}
 	}
 	findings = append(findings, evidenceFindings(evidence)...)
+	p := picture{latest: latestSteps(steps), Targets: targets, Evidence: evidence}
+	for _, rule := range connectedRules {
+		findings = append(findings, rule(p)...)
+	}
 	slices.SortStableFunc(findings, func(a, b Finding) int { return severityRank[a.Severity] - severityRank[b.Severity] })
 	return findings
+}
+
+// A connected rule draws Findings from the Case as a whole: several Steps,
+// possibly on different Targets, and Evidence. Each Finding it returns sets
+// its own Target and cites everything it used.
+type connectedRule func(p picture) []Finding
+
+// connectedRules is the registry; each rule registers itself from its own
+// file's init, like Checks.
+var connectedRules []connectedRule
+
+func registerRule(r connectedRule) { connectedRules = append(connectedRules, r) }
+
+// picture is the Case's current state as connected rules see it.
+type picture struct {
+	latest   []Step // latestSteps: the latest finished Step per Check, Target and subject
+	Targets  []Target
+	Evidence []Evidence
+}
+
+// step returns the latest Step of check on target if it succeeded. A failed
+// latest run means the Case has no current answer, even if an earlier run
+// succeeded.
+func (p picture) step(check, target string) *Step {
+	for i := len(p.latest) - 1; i >= 0; i-- {
+		if s := p.latest[i]; s.Check == check && s.Target == target {
+			if s.Status != "ok" {
+				return nil
+			}
+			return &p.latest[i]
+		}
+	}
+	return nil
 }
 
 func plural(n int, one, many string) string {
