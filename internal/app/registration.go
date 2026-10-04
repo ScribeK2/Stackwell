@@ -281,11 +281,28 @@ func whoisLookup(ctx context.Context, n Net, server, name string) (registrationR
 		}
 		server = net.JoinHostPort(m[1], "43")
 	}
-	text, err := whoisQuery(ctx, n, server, name)
+	text, err := whoisQuery(ctx, n, server, whoisQueryFor(name))
 	if err != nil {
 		return registrationResult{}, err
 	}
-	return parseWHOIS(name, text), nil
+	res := parseWHOIS(name, text)
+	if slices.Contains(res.Statuses, "invalid") {
+		// The registry rejected the query itself: that says nothing about
+		// whether the domain exists, so fail rather than report it free.
+		return registrationResult{}, errors.New("the registry answered that the query for " + name + " is invalid")
+	}
+	return res, nil
+}
+
+// whoisQueryForms holds registries that answer a bare name with too little.
+// DENIC (.de) replies only "Domain:" and "Status:" unless asked with
+// -T dn,ace, which adds the nameservers and the last change date; the ",ace"
+// is what makes internationalised names (xn--…) work instead of "invalid".
+var whoisQueryForms = map[string]string{"de": "-T dn,ace "}
+
+func whoisQueryFor(name string) string {
+	tld := name[strings.LastIndex(name, ".")+1:]
+	return whoisQueryForms[tld] + name
 }
 
 func parseWHOIS(name, text string) registrationResult {
@@ -327,13 +344,14 @@ func parseWHOIS(name, text string) registrationResult {
 	slices.Sort(res.Statuses)
 	slices.Sort(res.Nameservers)
 	// WHOIS has no common "no match" signal; a reply with no registrar,
-	// dates or nameservers is the closest proxy (DENIC's "Status: free" is an
-	// explicit one). Only applied to WHOIS: a sparse RDAP record is still a
-	// registered domain. Nameservers and the updated date count because
-	// DENIC gives no registrar or creation/expiry date for registered names.
+	// dates or nameservers is the closest proxy. DENIC is explicit both ways:
+	// "Status: free" is unregistered and "Status: connect" is active (it gives
+	// no registrar or creation/expiry date for registered names). Only applied
+	// to WHOIS: a sparse RDAP record is still a registered domain.
 	// ponytail: a heavily redacted WHOIS record for a registered domain could trip this.
 	res.Registered = !slices.Contains(res.Statuses, "free") &&
-		(res.Registrar != "" || res.Expires != "" || res.Created != "" || res.Updated != "" || len(res.Nameservers) > 0)
+		(slices.Contains(res.Statuses, "connect") || res.Registrar != "" || res.Expires != "" ||
+			res.Created != "" || res.Updated != "" || len(res.Nameservers) > 0)
 	return res
 }
 
