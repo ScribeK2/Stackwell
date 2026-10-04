@@ -57,7 +57,7 @@
   aria-label="Command palette"
   onclose={() => (keymap.paletteOpen = false)}
   onclick={(e) => e.target === dialog && (keymap.paletteOpen = false)}
-  class="mx-auto mt-[14vh] w-[min(560px,calc(100vw-32px))] animate-pop overflow-hidden rounded-xl bg-surface p-0 text-fg shadow-pop"
+  class="mx-auto mt-[14vh] w-[min(560px,calc(100vw-32px))] overflow-hidden rounded-xl bg-surface p-0 text-fg shadow-pop"
 >
   <input
     bind:value={query}

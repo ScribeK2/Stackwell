@@ -25,7 +25,7 @@
   onclose={() => (keymap.helpOpen = false)}
   onclick={(e) => e.target === dialog && (keymap.helpOpen = false)}
   onkeydown={(e) => e.key === '?' && (keymap.helpOpen = false)}
-  class="mx-auto mt-[14vh] w-[min(480px,calc(100vw-32px))] animate-pop rounded-xl bg-surface p-0 text-fg shadow-pop"
+  class="mx-auto mt-[14vh] w-[min(480px,calc(100vw-32px))] rounded-xl bg-surface p-0 text-fg shadow-pop"
 >
   <header class="flex h-11 items-center justify-between border-b border-line px-4">
     <h2 class="font-medium">Keyboard shortcuts</h2>

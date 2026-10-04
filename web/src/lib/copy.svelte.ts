@@ -3,12 +3,17 @@ import { api } from './api'
 // A short-lived message for things that happen without a visible change.
 class Toast {
   message = $state('')
+  open = $state(false)
+  // Bumped on every show, so a repeat of the same message still plays again.
+  count = $state(0)
   #timer = 0
 
   show(message: string) {
     this.message = message
+    this.open = true
+    this.count++
     clearTimeout(this.#timer)
-    this.#timer = window.setTimeout(() => (this.message = ''), 2200)
+    this.#timer = window.setTimeout(() => (this.open = false), 2200)
   }
 }
 

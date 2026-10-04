@@ -16,7 +16,7 @@
     <span class="ml-auto flex items-center gap-2 text-xs text-muted">
       {#if run.status === 'running'}
         <span class="h-1 w-24 overflow-hidden rounded-full bg-raised" aria-hidden="true">
-          <span class="block h-full bg-accent transition-[width]" style="width: {(finished / run.total) * 100}%"></span>
+          <span class="block h-full origin-left bg-accent transition-[scale] duration-200 ease-out" style="scale: {finished / run.total} 1"></span>
         </span>
         <span class="tabular-nums">{finished}/{run.total}</span>
         <button onclick={oncancel} class="rounded px-1.5 py-0.5 text-muted transition-colors hover:bg-raised hover:text-crit">Cancel</button>

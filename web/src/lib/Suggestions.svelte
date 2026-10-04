@@ -35,7 +35,7 @@
 <div class="mt-2 flex flex-wrap items-center gap-1.5" aria-label="Suggested Targets" role="group">
   <span class="mr-0.5 text-xs text-subtle">Suggested <Kbd key="s" /></span>
   {#each suggestions as s, i (s.value)}
-    <span class="flex h-6 items-center rounded-md border border-dashed border-line-strong text-xs">
+    <span data-pill class="flex h-6 items-center rounded-md border border-dashed border-line-strong text-xs">
       <button
         data-suggestion
         onclick={() => onaccept(s)}
