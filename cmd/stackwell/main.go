@@ -29,6 +29,7 @@ func main() {
 	noBrowser := flag.Bool("no-browser", false, "print the URL instead of opening a browser")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	noKeyring := flag.Bool("no-keyring", false, "keep secrets in a file in the config folder, never the system keyring")
+	updateURL := flag.String("update-url", "https://api.github.com/repos/ScribeK2/Stackwell/releases/latest", "latest-release endpoint to check for updates (\"\" turns checks off)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
@@ -62,7 +63,23 @@ func main() {
 	if _, err := fs.Stat(ui, "index.html"); err != nil {
 		ui = nil // built without `npm run build`; serve the placeholder
 	}
-	srv, err := app.New(app.Config{Version: version, DataDir: dataDir, ConfigDir: configDir, TryKeyring: !*noKeyring, Net: app.Net{Resolver: systemResolver()}, UI: ui})
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// An installed update asks for a restart: shut down cleanly, then exec it.
+	restartTo := make(chan string, 1)
+	srv, err := app.New(app.Config{
+		Version: version, DataDir: dataDir, ConfigDir: configDir, TryKeyring: !*noKeyring,
+		Net: app.Net{Resolver: systemResolver()}, UI: ui,
+		UpdateURL:    *updateURL,
+		AppImagePath: os.Getenv("APPIMAGE"), // set by the AppImage runtime
+		Restart: func(appImage string) {
+			select {
+			case restartTo <- appImage:
+			default:
+			}
+			stop()
+		},
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -79,8 +96,6 @@ func main() {
 		openBrowser(url)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	// Request contexts derive from ctx, so open event streams end on shutdown
 	// and Shutdown can wait for every handler before the store closes.
 	hs := &http.Server{Handler: srv.Handler(), BaseContext: func(net.Listener) context.Context { return ctx }}
@@ -95,6 +110,19 @@ func main() {
 	}
 	<-shutdown
 	srv.Close()
+
+	select {
+	case appImage := <-restartTo:
+		// Same port, so the open window reconnects; no new window. The
+		// active Case lives in the database, so it comes back by itself.
+		inst.Close()
+		args := []string{appImage, "--no-browser", "-port", strconv.Itoa(ln.Addr().(*net.TCPAddr).Port), "-update-url", *updateURL}
+		if *noKeyring {
+			args = append(args, "--no-keyring")
+		}
+		log.Fatal(syscall.Exec(appImage, args, os.Environ()))
+	default:
+	}
 }
 
 // xdgDir returns $env/stackwell, or ~/fallback/stackwell, creating it 0700.

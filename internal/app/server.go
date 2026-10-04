@@ -28,6 +28,14 @@ type Config struct {
 	ConfigDir string
 	// TryKeyring stores secrets in the system keyring when one answers.
 	TryKeyring bool
+	// UpdateURL is the latest-release endpoint (GitHub API shape); "" turns
+	// update checks off.
+	UpdateURL string
+	// AppImagePath is the running AppImage ($APPIMAGE), which an update
+	// replaces; "" when not running as an AppImage.
+	AppImagePath string
+	// Restart is called with the new AppImage after an update is in place.
+	Restart func(appImage string)
 }
 
 type Server struct {
@@ -35,6 +43,7 @@ type Server struct {
 	store   *store
 	events  *broker
 	secrets secretStore
+	upd     updater
 
 	reloadMu       sync.Mutex // serialises reloadPlaybooks
 	pbMu           sync.Mutex // guards the three below, reloaded from disk
@@ -103,6 +112,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/evidence/kinds", evidenceKinds)
 	mux.HandleFunc("GET /api/cases/{id}/steps/{step}/text", s.getStepText)
 	mux.HandleFunc("POST /api/cases/{id}/suggestions/dismiss", s.dismissSuggestion)
+	mux.HandleFunc("GET /api/update", s.getUpdate)
+	mux.HandleFunc("POST /api/update/install", s.installUpdate)
 	mux.HandleFunc("GET /api/settings", s.getSettings)
 	mux.HandleFunc("PUT /api/settings/secrets/{name}", s.putSecret)
 	mux.HandleFunc("DELETE /api/settings/secrets/{name}", s.deleteSecret)
@@ -124,7 +135,7 @@ func (s *Server) Handler() http.Handler {
 			fmt.Fprint(w, "<!doctype html><title>Stackwell</title><p>UI not built.</p>")
 		})
 	}
-	return mux
+	return localOnly(mux)
 }
 
 // createCase starts a Case from the Target the rep typed and makes it active.

@@ -11,6 +11,7 @@
   import Palette from './lib/Palette.svelte'
   import PasteEvidence from './lib/PasteEvidence.svelte'
   import Toast from './lib/Toast.svelte'
+  import Update from './lib/Update.svelte'
   import WriteUp from './lib/WriteUp.svelte'
   import Settings from './lib/Settings.svelte'
   import RunCard from './lib/RunCard.svelte'
@@ -383,6 +384,7 @@
       <span class="truncate text-muted">{caseName(current)}</span>
     {/if}
     <div class="ml-auto flex items-center gap-1">
+      <Update />
       <button
         onclick={newCase}
         class="flex h-7 items-center gap-2 rounded-md px-2 text-muted transition-colors hover:bg-raised hover:text-fg"
