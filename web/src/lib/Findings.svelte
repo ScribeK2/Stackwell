@@ -37,7 +37,7 @@
     {#if problems.length}<span class="rounded bg-raised px-1.5 py-px font-mono text-[11px] tracking-normal text-muted normal-case">{problems.length}</span>{/if}
   </h2>
   <ul class="overflow-hidden rounded-lg border border-line bg-surface">
-    {#each problems as f (f.code + f.target + f.citations.join() + (f.evidence ?? []).join())}
+    {#each problems as f, i (i)}
       <li class="border-b border-line px-3.5 py-3 last:border-b-0">
         <div class="flex items-baseline gap-2">
           <span class="flex shrink-0 items-center gap-1.5 text-xs font-medium {tone[f.severity].text}">
@@ -61,7 +61,7 @@
     {/each}
     {#if fine.length}
       <li class="flex flex-wrap gap-x-4 gap-y-1 px-3.5 py-2.5 text-xs">
-        {#each fine as f (f.code + f.target + (f.evidence ?? []).join())}
+        {#each fine as f, i (i)}
           <button
             onclick={() => (f.citations.length ? goTo(f.citations[0]) : goTo(f.evidence?.[0] ?? 0, 'data-evidence-id'))}
             class="flex items-center gap-1.5 text-muted hover:text-fg"

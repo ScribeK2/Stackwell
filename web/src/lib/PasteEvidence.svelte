@@ -58,7 +58,9 @@
       bind:value={raw}
       aria-label="Pasted text"
       spellcheck="false"
-      placeholder="Paste the full message headers here (in Gmail: Show original; in Outlook: View message source)."
+      placeholder={kind === 'mail_log'
+        ? 'Paste Postfix / Dovecot log lines here, e.g. copied from Graylog. Wrapped lines are fine.'
+        : 'Paste the full message headers here (in Gmail: Show original; in Outlook: View message source).'}
       class="block h-[50vh] w-full resize-none bg-transparent px-4 py-3 font-mono text-xs outline-none placeholder:font-sans placeholder:text-subtle focus-visible:outline-none"
       onkeydown={(e) => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.currentTarget.form?.requestSubmit()}
     ></textarea>
