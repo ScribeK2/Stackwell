@@ -47,6 +47,7 @@ type Server struct {
 
 	runsMu  sync.Mutex
 	running map[int64]context.CancelFunc // run id → cancel, while it runs
+	stepsOn map[int64]context.CancelFunc // step id → cancel, while it runs
 }
 
 func New(cfg Config) (*Server, error) {
@@ -69,7 +70,7 @@ func New(cfg Config) (*Server, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{cfg: cfg, store: st, events: newBroker(), ctx: ctx, cancel: cancel,
 		secrets: openSecrets(cfg.ConfigDir, cfg.TryKeyring),
-		running: map[int64]context.CancelFunc{}}
+		running: map[int64]context.CancelFunc{}, stepsOn: map[int64]context.CancelFunc{}}
 	if err := s.reloadPlaybooks(); err != nil {
 		cancel()
 		st.db.Close()
@@ -94,6 +95,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/cases/{id}", s.editCase)
 	mux.HandleFunc("POST /api/cases/{id}/targets", s.addTarget)
 	mux.HandleFunc("POST /api/cases/{id}/steps", s.runCheck)
+	mux.HandleFunc("POST /api/cases/{id}/steps/all", s.runCheckOnAll)
+	mux.HandleFunc("POST /api/cases/{id}/steps/{step}/cancel", s.cancelStep)
 	mux.HandleFunc("GET /api/cases/{id}/writeup", s.getWriteup)
 	mux.HandleFunc("POST /api/cases/{id}/evidence", s.postEvidence)
 	mux.HandleFunc("GET /api/evidence/kinds", evidenceKinds)
@@ -212,6 +215,77 @@ func (s *Server) dismissSuggestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respondCase(w, http.StatusOK, id, s.store.dismiss(id, value))
+}
+
+// runCheckOnAll runs one Check on every Target of the Case it applies to.
+func (s *Server) runCheckOnAll(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.caseID(w, r)
+	var body struct {
+		Check   string
+		Options map[string]string
+	}
+	if !ok || !decode(w, r, &body) {
+		return
+	}
+	c := checkByKey(body.Check)
+	if c == nil {
+		httpError(w, http.StatusBadRequest, "no such check: "+body.Check)
+		return
+	}
+	opts, err := c.resolveOptions(body.Options)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	targets, err := s.store.targets(id)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	applies, ran := 0, 0
+	var lastErr error
+	for _, t := range targets {
+		if !slices.Contains(t.Checks, c.key) {
+			continue
+		}
+		applies++
+		// One Target failing to start doesn't stop the others; the Case
+		// returned shows which ran, so a retry needn't duplicate them.
+		if _, err := s.runStep(s.ctx, id, *c, t.Value, opts, 0); err != nil {
+			lastErr = err
+			continue
+		}
+		ran++
+	}
+	switch {
+	case applies == 0:
+		httpError(w, http.StatusBadRequest, c.label+" doesn't apply to any Target of this Case")
+		return
+	case ran == 0:
+		httpError(w, http.StatusInternalServerError, "could not start "+c.label+": "+lastErr.Error())
+		return
+	}
+	s.respondCase(w, http.StatusOK, id, nil)
+}
+
+// cancelStep stops one running Step; it ends as cancelled. Cancelling a
+// finished Step changes nothing.
+func (s *Server) cancelStep(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.caseID(w, r)
+	if !ok {
+		return
+	}
+	stepID, _ := strconv.ParseInt(r.PathValue("step"), 10, 64)
+	if owner, err := s.store.stepCase(stepID); err != nil || owner != id {
+		httpError(w, http.StatusNotFound, "no such step")
+		return
+	}
+	s.runsMu.Lock()
+	if stop := s.stepsOn[stepID]; stop != nil {
+		stop()
+	}
+	s.runsMu.Unlock()
+	s.respondCase(w, http.StatusOK, id, nil)
 }
 
 func (s *Server) editCase(w http.ResponseWriter, r *http.Request) {
@@ -347,14 +421,27 @@ func (s *Server) runStep(parent context.Context, caseID int64, c check, target s
 		return nil, err
 	}
 	s.events.publish(caseID, st)
+	// The Step's own switch: the rep can stop just this Step (cancelStep),
+	// and stopping its run or the server stops it too.
+	stepCtx, stop := context.WithCancel(parent)
+	s.runsMu.Lock()
+	s.stepsOn[st.ID] = stop
+	s.runsMu.Unlock()
 	done := make(chan Step, 1)
 	s.steps.Go(func() {
-		ctx, cancel := context.WithTimeout(parent, s.cfg.CheckTimeout)
+		defer func() {
+			s.runsMu.Lock()
+			delete(s.stepsOn, st.ID)
+			s.runsMu.Unlock()
+			stop()
+		}()
+		ctx, cancel := context.WithTimeout(stepCtx, s.cfg.CheckTimeout)
 		defer cancel()
 		result, runErr := c.run(ctx, s.cfg.Net, target, opts)
-		// Cancelled only if it ended because the rep (or shutdown) stopped it:
-		// a result that arrived just before the cancel is still a result.
-		cancelled := runErr != nil && parent.Err() != nil
+		// Cancelled only if it ended because it was stopped (the rep, its run
+		// or shutdown), not because it timed out; a result that arrived just
+		// before the cancel is still a result.
+		cancelled := runErr != nil && stepCtx.Err() != nil
 		if err := s.store.finishStep(&st, result, runErr, cancelled); err != nil {
 			st.Status, st.Error = "failed", "could not save result: "+err.Error()
 		}

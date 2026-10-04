@@ -570,6 +570,13 @@ func (s *store) finishRun(runID int64, status string, skipped []skip) error {
 	return err
 }
 
+// stepCase returns the Case a Step belongs to, or sql.ErrNoRows.
+func (s *store) stepCase(stepID int64) (int64, error) {
+	var caseID int64
+	err := s.db.QueryRow(`SELECT case_id FROM steps WHERE id = ?`, stepID).Scan(&caseID)
+	return caseID, err
+}
+
 // runCase returns the Case a run belongs to, or sql.ErrNoRows.
 func (s *store) runCase(runID int64) (int64, error) {
 	var caseID int64

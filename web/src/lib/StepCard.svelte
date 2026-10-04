@@ -18,7 +18,14 @@
     earlier,
     onrerun,
     oncopy,
-  }: { step: Step; earlier: boolean; onrerun: (options?: Record<string, string>) => void; oncopy: () => void } = $props()
+    oncancel,
+  }: {
+    step: Step
+    earlier: boolean
+    onrerun: (options?: Record<string, string>) => void
+    oncopy: () => void
+    oncancel: () => void
+  } = $props()
 
   // Earlier runs start collapsed; the latest is always open.
   let expanded = $state(false)
@@ -62,7 +69,12 @@
       ></span>
       {{ running: 'Running', ok: 'Done', failed: 'Failed', cancelled: 'Cancelled' }[step.status]}
     </span>
-    {#if step.status !== 'running'}
+    {#if step.status === 'running'}
+      <button
+        onclick={oncancel}
+        class="flex h-6 items-center rounded px-1.5 text-xs text-muted transition-colors hover:bg-raised hover:text-crit"
+        aria-label="Cancel {label} on {step.target}">Cancel <span class="ml-1.5 text-subtle">X</span></button>
+    {:else}
       <button
         onclick={oncopy}
         class="flex h-6 items-center rounded px-1.5 text-xs text-muted transition-colors hover:bg-raised hover:text-fg"

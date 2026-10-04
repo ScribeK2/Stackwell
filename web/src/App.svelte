@@ -129,6 +129,21 @@
   // A re-run repeats the Step exactly, options included, unless a view asks for others.
   const rerun = (step: Step, options?: Record<string, string>) => runCheck(step.check, step.target, options ?? step.options)
 
+  const runOnAll = (check: string, options?: Record<string, string>) =>
+    onCase((id) => api<Case>('POST', `/api/cases/${id}/steps/all`, { check, options }))
+
+  const cancelStep = (step: Step) => onCase((id) => api<Case>('POST', `/api/cases/${id}/steps/${step.id}/cancel`))
+
+  function focusedStep(): Step | undefined {
+    const id = Number((document.activeElement as HTMLElement | null)?.closest<HTMLElement>('[data-step-id]')?.dataset.stepId)
+    return current?.steps?.find((s) => s.id === id)
+  }
+
+  function cancelFocused() {
+    const step = focusedStep()
+    if (step?.status === 'running') cancelStep(step)
+  }
+
   function rerunFocused() {
     const id = Number((document.activeElement as HTMLElement | null)?.closest<HTMLElement>('[data-step-id]')?.dataset.stepId)
     const step = current?.steps?.find((s) => s.id === id)
@@ -177,6 +192,7 @@
       },
       { id: 'focus-target', title: 'Add a Target', group: 'Case', keys: ['/'], run: () => targetEl.focus() },
       { id: 'rerun', title: 'Re-run focused Step', group: 'Case', keys: ['r'], run: rerunFocused },
+      { id: 'cancel-step', title: 'Cancel focused Step', group: 'Case', keys: ['x'], run: cancelFocused },
       {
         id: 'copy-writeup',
         title: 'Copy Write-up (Markdown)',
@@ -236,6 +252,21 @@
           group: p.source === 'built-in' ? 'Playbook' : 'Team Playbook',
           run: () => runPlaybook(p.name, t.value),
         })
+      }
+    }
+    // With several Targets: each Check once across all the Targets it fits.
+    if ((current?.targets.length ?? 0) > 1) {
+      for (const c of checks.list.filter((c) => current!.targets.some((t) => t.checks.includes(c.key)))) {
+        const select = c.options.find((o) => o.choices?.length)
+        for (const choice of select?.choices ?? [undefined]) {
+          const suffix = choice && choice !== select!.default ? ` (${select!.label.toLowerCase()}: ${choice})` : ''
+          actions.push({
+            id: `run-all-${c.key}-${choice ?? ''}`,
+            title: `Run ${c.label}${suffix} on all Targets`,
+            group: 'Run',
+            run: () => runOnAll(c.key, choice ? { [select!.key]: choice } : undefined),
+          })
+        }
       }
     }
     for (const r of (current?.runs ?? []).filter((r) => r.status === 'running')) {
@@ -505,6 +536,7 @@
               {step}
               {earlier}
               onrerun={(options) => rerun(step, options)}
+              oncancel={() => cancelStep(step)}
               oncopy={() =>
                 current &&
                 attempt(async () =>
