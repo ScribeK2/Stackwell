@@ -30,7 +30,8 @@ func caseFindings(steps []Step, targets []Target, evidence []Evidence) []Finding
 		kinds[t.Value] = t.Kind
 	}
 	findings := []Finding{}
-	for _, st := range latestSteps(steps) {
+	latest := latestSteps(steps)
+	for _, st := range latest {
 		var fs []Finding
 		if st.Status == "failed" {
 			fs = []Finding{{Code: "check_failed", Severity: "warning",
@@ -46,7 +47,7 @@ func caseFindings(steps []Step, targets []Target, evidence []Evidence) []Finding
 		}
 	}
 	findings = append(findings, evidenceFindings(evidence)...)
-	p := picture{latest: latestSteps(steps), Targets: targets, Evidence: evidence}
+	p := picture{latest: latest, Targets: targets, Evidence: evidence}
 	for _, rule := range connectedRules {
 		findings = append(findings, rule(p)...)
 	}

@@ -11,7 +11,9 @@ import (
 
 // Connected Findings: conclusions drawn from several Steps at once.
 
-const m365Zone = `
+// providerZone: example.com's mail is on Microsoft 365, but its SPF record
+// only includes Zendesk. Tests swap lines to vary the case.
+const providerZone = `
 example.com. 300 IN A 93.184.216.34
 example.com. 300 IN MX 0 example-com.mail.protection.outlook.com.
 example.com. 300 IN NS a.iana-servers.net.
@@ -22,7 +24,7 @@ _spf.example.com. 300 IN TXT "v=spf1 include:spf.protection.outlook.com -all"
 `
 
 // spfCase runs DNS Lookup (automatically) and Email Authentication on
-// example.com and returns the Case's Steps and Findings.
+// example.com, returning the harness, the Case's id and its Steps and Findings.
 func spfCase(t *testing.T, resolver string) (*harness, int64, findingsCase) {
 	t.Helper()
 	h := start(t, app.Config{Net: app.Net{Resolver: resolver}})
@@ -41,7 +43,7 @@ func TestSPFMissingTheMailProviderIsFlagged(t *testing.T) {
 		{"Google Workspace", "1 aspmx.l.google.com.", "_spf.google.com", "Google Workspace"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			zone := strings.Replace(m365Zone, "0 example-com.mail.protection.outlook.com.", tc.mx, 1)
+			zone := strings.Replace(providerZone, "0 example-com.mail.protection.outlook.com.", tc.mx, 1)
 			h, id, fc := spfCase(t, fakeDNS(t, zone, false))
 			f := findingWith(fc.Findings, "spf_missing_provider")
 			if f == nil {
@@ -70,12 +72,12 @@ func TestSPFMissingTheMailProviderIsFlagged(t *testing.T) {
 }
 
 func TestFixingSPFClearsTheProviderFinding(t *testing.T) {
-	resolver, setZone := mutableDNS(t, m365Zone, false)
+	resolver, setZone := mutableDNS(t, providerZone, false)
 	h, id, fc := spfCase(t, resolver)
 	if findingWith(fc.Findings, "spf_missing_provider") == nil {
 		t.Fatalf("no Finding before the fix: %v", codes(fc.Findings))
 	}
-	setZone(strings.Replace(m365Zone, `"v=spf1 include:mail.zendesk.com -all"`, `"v=spf1 include:mail.zendesk.com include:spf.protection.outlook.com -all"`, 1))
+	setZone(strings.Replace(providerZone, `"v=spf1 include:mail.zendesk.com -all"`, `"v=spf1 include:mail.zendesk.com include:spf.protection.outlook.com -all"`, 1))
 	h.rerun(id, "email_auth", "example.com")
 	h.waitSteps(id, 3)
 	h.do("GET", "/api/cases/"+itoa(id), nil, &fc)
@@ -88,13 +90,14 @@ func TestProviderFindingStaysSilentWhenItDoesNotApply(t *testing.T) {
 	for _, tc := range []struct{ name, from, to string }{
 		{"nested include", `"v=spf1 include:mail.zendesk.com -all"`, `"v=spf1 include:_spf.example.com -all"`},
 		{"redirect", `"v=spf1 include:mail.zendesk.com -all"`, `"v=spf1 redirect=_spf.example.com"`},
+		{"direct redirect", `"v=spf1 include:mail.zendesk.com -all"`, `"v=spf1 redirect=spf.protection.outlook.com"`},
 		{"no SPF record", `example.com. 300 IN TXT "v=spf1 include:mail.zendesk.com -all"`, ``},
 		{"two SPF records", `example.com. 300 IN TXT "v=spf1 include:mail.zendesk.com -all"`,
 			"example.com. 300 IN TXT \"v=spf1 -all\"\nexample.com. 300 IN TXT \"v=spf1 ~all\""},
 		{"unknown provider", "0 example-com.mail.protection.outlook.com.", "10 mx.example.net."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, fc := spfCase(t, fakeDNS(t, strings.Replace(m365Zone, tc.from, tc.to, 1), false))
+			_, _, fc := spfCase(t, fakeDNS(t, strings.Replace(providerZone, tc.from, tc.to, 1), false))
 			if f := findingWith(fc.Findings, "spf_missing_provider"); f != nil {
 				t.Fatalf("unexpected Finding: %+v", f)
 			}
@@ -104,7 +107,7 @@ func TestProviderFindingStaysSilentWhenItDoesNotApply(t *testing.T) {
 
 func TestProviderFindingNeedsBothSteps(t *testing.T) {
 	// Only the automatic DNS Lookup: no Email Authentication Step yet.
-	h := start(t, app.Config{Net: app.Net{Resolver: fakeDNS(t, m365Zone, false)}})
+	h := start(t, app.Config{Net: app.Net{Resolver: fakeDNS(t, providerZone, false)}})
 	c := newCase(h, "example.com")
 	h.waitSteps(c.ID, 1)
 	var fc findingsCase
@@ -115,7 +118,7 @@ func TestProviderFindingNeedsBothSteps(t *testing.T) {
 
 	// Email Authentication whose latest run failed: the earlier, successful
 	// run no longer speaks for the domain.
-	h2, id, fc2 := spfCase(t, fakeDNS(t, m365Zone, false))
+	h2, id, fc2 := spfCase(t, fakeDNS(t, providerZone, false))
 	if findingWith(fc2.Findings, "spf_missing_provider") == nil {
 		t.Fatalf("no Finding to begin with: %v", codes(fc2.Findings))
 	}

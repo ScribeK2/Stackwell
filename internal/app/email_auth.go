@@ -72,8 +72,11 @@ func spfMissingProvider(p picture) []Finding {
 		for _, pv := range mailProviders {
 			mx := ""
 			for _, rr := range lookup.Records["MX"] {
-				f := strings.Fields(rr) // "10 host."
-				host := strings.ToLower(strings.TrimSuffix(f[len(f)-1], "."))
+				_, host, ok := strings.Cut(rr, " ") // "10 host."
+				if !ok {
+					continue
+				}
+				host = strings.ToLower(strings.TrimSuffix(host, "."))
 				for _, sfx := range pv.mxSuffix {
 					if host == sfx || strings.HasSuffix(host, "."+sfx) {
 						mx = host
