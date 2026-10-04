@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Clamp from '../Clamp.svelte'
   import type { Step } from '../api'
   let { step, rerun }: { step: Step; rerun: (options?: Record<string, string>) => void } = $props()
 
@@ -76,8 +77,8 @@
         <p class="mb-1 text-crit">{s.records.length} SPF records; only one is allowed.</p>
         {#each s.records as rec}<p class="font-mono break-all">{rec}</p>{/each}
       {:else if s.tree}
-        <p class="mb-1.5 font-mono break-all text-muted">{s.tree.record}</p>
-        <div class="font-mono break-all">{@render tree(s.tree, 0)}</div>
+        <div class="mb-1.5 font-mono break-all text-muted"><Clamp lines={3}>{s.tree.record}</Clamp></div>
+        <div class="font-mono break-all"><Clamp lines={12} rowHeight={20}>{@render tree(s.tree, 0)}</Clamp></div>
       {/if}
       {#each s.errors as e}<p class="mt-1 text-crit">{e}</p>{/each}
       {#each s.failed as f}<p class="mt-1 text-warn">No answer: {f}</p>{/each}

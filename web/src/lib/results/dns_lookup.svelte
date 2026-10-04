@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Clamp from '../Clamp.svelte'
   import type { Step } from '../api'
   let { step }: { step: Step; rerun: (options?: Record<string, string>) => void } = $props()
 
@@ -12,6 +13,7 @@
 {#each Object.entries(r.errors ?? {}) as [type, msg]}
   <p class="px-3.5 pt-2 text-xs text-warn">{type} query failed: {msg}</p>
 {/each}
+<Clamp lines={12} rowHeight={24} inset>
 <table class="my-1.5 w-full font-mono text-xs">
   <tbody>
     {#each order as type}
@@ -24,3 +26,4 @@
     {/each}
   </tbody>
 </table>
+</Clamp>

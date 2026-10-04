@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Clamp from '../Clamp.svelte'
   import type { Step } from '../api'
   let { step }: { step: Step; rerun: (options?: Record<string, string>) => void } = $props()
 
@@ -84,7 +85,9 @@
             <span class={h?.present ? 'text-ok' : ''}>{h?.present ? '✓' : '✕'}</span> {name}
           </th>
           <td class="py-0.5 pr-3.5 font-mono break-all {h?.present ? 'text-muted' : 'font-sans text-subtle'}">
-            {#if h?.present}{h.value}{#if h.via}<span class="font-sans text-subtle"> (via {h.via})</span>{/if}{:else}missing{/if}
+            {#if h?.present}
+              <Clamp lines={3}>{h.value}{#if h.via}<span class="font-sans text-subtle"> (via {h.via})</span>{/if}</Clamp>
+            {:else}missing{/if}
           </td>
         </tr>
       {/each}

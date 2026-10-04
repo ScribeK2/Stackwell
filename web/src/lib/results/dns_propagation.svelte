@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Clamp from '../Clamp.svelte'
   import type { Step } from '../api'
   let { step }: { step: Step; rerun: (options?: Record<string, string>) => void } = $props()
 
@@ -54,7 +55,9 @@
           {#each row.groups as g}
             <div class={row.split ? 'rounded border border-line px-2 py-1' : ''}>
               <div class="font-mono break-all">
-                {#each g.answer as v}<div>{v}</div>{:else}<span class="text-subtle">no records</span>{/each}
+                <Clamp lines={8}>
+                  {#each g.answer as v}<div>{v}</div>{:else}<span class="text-subtle">no records</span>{/each}
+                </Clamp>
               </div>
               <div class="mt-0.5 text-subtle">
                 {#if !row.split}
