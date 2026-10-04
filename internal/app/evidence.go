@@ -98,6 +98,7 @@ func readEvidence(q querier, caseID int64) ([]Evidence, error) {
 }
 
 func (s *store) addEvidence(caseID int64, kind, raw string) error {
+	defer s.touch(caseID)
 	_, err := s.db.Exec(`INSERT INTO evidence (case_id, kind, raw, created_at) VALUES (?, ?, ?, ?)`, caseID, kind, raw, now())
 	return err
 }

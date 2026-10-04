@@ -110,6 +110,7 @@ type Case struct {
 	Suggestions  []Suggestion `json:"suggestions,omitempty"`
 	Runs         []Run        `json:"runs,omitempty"`
 	Evidence     []Evidence   `json:"evidence,omitempty"`
+	MatchedBy    string       `json:"matched_by,omitempty"` // why a search returned it
 }
 
 // Run is one execution of a Playbook in a Case. Its label and Boundary notes
@@ -197,6 +198,7 @@ func (s *store) createCase(value, kind string) (int64, error) {
 
 // addTarget adds a Target to a Case; added is false if it was already there.
 func (s *store) addTarget(caseID int64, value, kind string) (added bool, err error) {
+	defer s.touch(caseID)
 	res, err := s.db.Exec(`INSERT INTO targets (case_id, value, kind) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, caseID, value, kind)
 	if err != nil {
 		return false, err
@@ -218,6 +220,7 @@ type caseEdit struct {
 }
 
 func (s *store) editCase(id int64, e caseEdit) error {
+	defer s.touch(id)
 	_, err := s.db.Exec(`UPDATE cases SET
 		title = coalesce(?, title), ticket_ref = coalesce(?, ticket_ref), status = coalesce(?, status), notes = coalesce(?, notes)
 		WHERE id = ?`, e.Title, e.TicketRef, e.Status, e.Notes, id)
@@ -288,6 +291,7 @@ func optionsKey(opts map[string]string) string {
 }
 
 func (s *store) startStep(caseID int64, check, target string, opts map[string]string, runID int64) (Step, error) {
+	defer s.touch(caseID)
 	st := Step{Check: check, Target: target, Options: opts, RunID: runID, Status: "running", StartedAt: time.Now().UTC()}
 	res, err := s.db.Exec(`INSERT INTO steps (case_id, check_key, target, options, run_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		caseID, check, target, optionsKey(opts), nullID(runID), st.Status, st.StartedAt.Format(time.RFC3339Nano))
@@ -351,12 +355,13 @@ func readTargets(q querier, caseID int64) ([]Target, error) {
 }
 
 // recentCases lists Cases, most recently active first, without their Steps.
-func (s *store) recentCases(limit int) ([]Case, error) {
-	rows, err := s.db.Query(`SELECT `+caseColumns+` FROM cases ORDER BY last_active_at DESC, id DESC LIMIT ?`, limit)
+func (s *store) recentCases(limit int, includeResolved bool) ([]Case, error) {
+	rows, err := s.db.Query(`SELECT `+caseColumns+` FROM cases WHERE status = 'open' OR ?
+		ORDER BY last_active_at DESC, id DESC LIMIT ?`, includeResolved, limit)
 	if err != nil {
 		return nil, err
 	}
-	var cs []Case
+	cs := []Case{}
 	for rows.Next() {
 		c, err := scanCase(rows)
 		if err != nil {
@@ -497,6 +502,7 @@ func (s *store) classifyTargets() error {
 }
 
 func (s *store) dismiss(caseID int64, value string) error {
+	defer s.touch(caseID)
 	_, err := s.db.Exec(`INSERT INTO dismissed (case_id, value) VALUES (?, ?) ON CONFLICT DO NOTHING`, caseID, value)
 	return err
 }
@@ -568,6 +574,56 @@ func (s *store) finishRun(runID int64, status string, skipped []skip) error {
 	b, _ := json.Marshal(skipped)
 	_, err := s.db.Exec(`UPDATE playbook_runs SET status = ?, skipped = ?, finished_at = ? WHERE id = ?`, status, string(b), now(), runID)
 	return err
+}
+
+// touch marks a Case as worked on now. Any change to a Case counts, so
+// purge's "not touched for N days" means what it says.
+func (s *store) touch(caseID int64) {
+	s.db.Exec(`UPDATE cases SET last_active_at = ? WHERE id = ?`, now(), caseID)
+}
+
+// inactiveSince lists the Cases last active before t.
+func (s *store) inactiveSince(t time.Time) ([]int64, error) {
+	rows, err := s.db.Query(`SELECT id FROM cases WHERE last_active_at < ?`, t.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// deleteCases removes Cases and everything they own, in one transaction,
+// and clears the active Case if it was one of them.
+func (s *store) deleteCases(ids []int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		for _, q := range []string{
+			`DELETE FROM dismissed WHERE case_id = ?`,
+			`DELETE FROM evidence WHERE case_id = ?`,
+			`DELETE FROM steps WHERE case_id = ?`,
+			`DELETE FROM playbook_runs WHERE case_id = ?`,
+			`DELETE FROM targets WHERE case_id = ?`,
+			`DELETE FROM cases WHERE id = ?`,
+			`DELETE FROM settings WHERE key = 'active_case' AND CAST(value AS INTEGER) = ?`,
+		} {
+			if _, err := tx.Exec(q, id); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
 }
 
 // stepCase returns the Case a Step belongs to, or sql.ErrNoRows.

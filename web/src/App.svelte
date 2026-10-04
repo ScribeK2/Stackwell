@@ -3,6 +3,7 @@
   import { api, ApiError, caseName, type Case, type PlaybookInfo, type Step, type Suggestion } from './lib/api'
   import Findings from './lib/Findings.svelte'
   import Help from './lib/Help.svelte'
+  import History from './lib/History.svelte'
   import Kbd from './lib/Kbd.svelte'
   import { checks } from './lib/checks.svelte'
   import { copyText, copyWriteup } from './lib/copy.svelte'
@@ -183,6 +184,7 @@
       { id: 'settings', title: 'Settings', group: 'General', keys: [','], run: () => (keymap.settingsOpen = true) },
       { id: 'help', title: 'Show keyboard shortcuts', group: 'General', keys: ['?'], run: () => (keymap.helpOpen = true) },
       { id: 'new-case', title: 'New Case', group: 'Case', keys: ['n'], run: newCase },
+      { id: 'history', title: 'Find a Case (history and search)', group: 'Case', keys: ['h'], run: () => (keymap.historyOpen = true) },
       {
         id: 'focus-suggestions',
         title: 'Go to suggested Targets',
@@ -311,7 +313,7 @@
   // types straight into the palette finds the Case already listed.
   $effect(() => {
     void [keymap.paletteOpen, current?.id, current?.title, current?.ticket_ref, current?.status]
-    api<Case[]>('GET', '/api/cases').then((cs) => (recent = cs), () => {})
+    api<Case[]>('GET', '/api/cases?resolved=1').then((cs) => (recent = cs), () => {})
   })
   $effect(() => {
     const actions: Action[] = recent
@@ -560,5 +562,13 @@
 <Help />
 <Settings />
 <WriteUp caseID={current?.id} />
+<History
+  onopen={switchTo}
+  onpurged={() =>
+    api<{ case: Case | null }>('GET', '/api/active').then(
+      (r) => r.case === null && current && show(null),
+      () => {},
+    )}
+/>
 <PasteEvidence caseID={current?.id} onpasted={(c) => current?.id === c.id && show(c)} />
 <Toast />

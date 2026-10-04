@@ -19,6 +19,7 @@ class Keymap {
   settingsOpen = $state(false)
   writeupOpen = $state(false)
   evidenceOpen = $state(false)
+  historyOpen = $state(false)
 }
 
 export const keymap = new Keymap()
@@ -51,7 +52,7 @@ export function handleKey(e: KeyboardEvent) {
   const key = keyOf(e)
   // Dialogs own the keyboard while open (Escape is handled natively), but our
   // own combos must not leak to the browser (Ctrl+K focuses its search bar).
-  if (keymap.paletteOpen || keymap.helpOpen || keymap.settingsOpen || keymap.writeupOpen || keymap.evidenceOpen) {
+  if (keymap.paletteOpen || keymap.helpOpen || keymap.settingsOpen || keymap.writeupOpen || keymap.evidenceOpen || keymap.historyOpen) {
     if (keymap.actions.some((a) => a.global && a.keys?.includes(key))) e.preventDefault()
     return
   }

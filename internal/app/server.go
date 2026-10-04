@@ -91,6 +91,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/checks", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, http.StatusOK, checkInfos()) })
 	mux.HandleFunc("GET /api/cases", s.listCases)
 	mux.HandleFunc("POST /api/cases", s.createCase)
+	mux.HandleFunc("POST /api/cases/purge", s.purgeCases)
 	mux.HandleFunc("GET /api/cases/{id}", s.getCase)
 	mux.HandleFunc("PATCH /api/cases/{id}", s.editCase)
 	mux.HandleFunc("POST /api/cases/{id}/targets", s.addTarget)
@@ -310,18 +311,6 @@ func (s *Server) getCase(w http.ResponseWriter, r *http.Request) {
 	if id, ok := s.caseID(w, r); ok {
 		s.respondCase(w, http.StatusOK, id, nil)
 	}
-}
-
-func (s *Server) listCases(w http.ResponseWriter, r *http.Request) {
-	cs, err := s.store.recentCases(50)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if cs == nil {
-		cs = []Case{}
-	}
-	writeJSON(w, http.StatusOK, cs)
 }
 
 // getActive returns {"case": Case} or {"case": null} when no Case is active.
